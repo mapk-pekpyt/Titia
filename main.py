@@ -1,4 +1,3 @@
-# main.py  — финальный ядро, НЕ МЕНЯТЬ
 from telebot import TeleBot
 from config import TOKEN
 from utils.db import init_db, get_db_utils
