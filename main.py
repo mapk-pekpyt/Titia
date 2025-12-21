@@ -4,7 +4,10 @@ import random
 import string
 import subprocess
 import time
-from datetime import datetime
+import json
+import sqlite3
+from datetime import datetime, timedelta
+from collections import defaultdict
 
 # ========== НАСТРОЙКИ ==========
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -12,8 +15,32 @@ if not TOKEN:
     raise RuntimeError("Нет TELEGRAM_BOT_TOKEN в окружении")
 
 bot = telebot.TeleBot(TOKEN)
-ADMIN_ID = "5791171535"  # Замени на свой ID (узнать у @userinfobot)
+ADMIN_ID = "5791171535"  # Твой ID
+
+# База данных пользователей
+DB_FILE = "/etc/vpn_users.db"
 # ===============================
+
+# Инициализация БД
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            telegram_id TEXT UNIQUE,
+            username TEXT,
+            vpn_username TEXT UNIQUE,
+            vpn_password TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_seen TIMESTAMP,
+            is_active INTEGER DEFAULT 1
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+init_db()
 
 # Проверка админа
 def is_admin(user_id):
@@ -23,6 +50,11 @@ def is_admin(user_id):
 def generate_password(length=12):
     chars = string.ascii_letters + string.digits + "!@#$%^&*"
     return ''.join(random.choice(chars) for _ in range(length))
+
+# Генерация имени пользователя VPN
+def generate_vpn_username(base="user"):
+    random_part = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+    return f"{base}_{random_part}"
 
 # Получение IP сервера
 def get_server_ip():
@@ -43,12 +75,146 @@ def get_server_ip():
     except:
         return "ВАШ_IP_СЕРВЕРА"
 
-# Запуск команды с выводом
+# Запуск команды
 def run_cmd(cmd, desc=""):
     if desc:
         print(f"[{desc}] {cmd}")
     result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
     return result.returncode, result.stdout, result.stderr
+
+# Проверка ОС
+def check_os():
+    try:
+        with open('/etc/os-release', 'r') as f:
+            content = f.read()
+            if 'Oracle' in content or 'ol' in content:
+                return "oracle"
+            elif 'Ubuntu' in content:
+                return "ubuntu"
+            elif 'Debian' in content:
+                return "debian"
+            elif 'CentOS' in content:
+                return "centos"
+        return "unknown"
+    except:
+        return "unknown"
+
+# Проверка установлен ли VPN
+def is_vpn_installed():
+    return os.path.exists('/etc/ipsec.conf') and os.path.exists('/etc/ipsec.secrets')
+
+# Добавление пользователя в VPN конфиг
+def add_vpn_user(username, password):
+    try:
+        with open('/etc/ipsec.secrets', 'a') as f:
+            f.write(f'\n{username} : EAP "{password}"')
+        
+        # Перезагружаем конфиг
+        run_cmd("ipsec rereadsecrets", "Обновление секретов")
+        return True
+    except:
+        return False
+
+# Удаление пользователя из VPN конфига
+def remove_vpn_user(username):
+    try:
+        with open('/etc/ipsec.secrets', 'r') as f:
+            lines = f.readlines()
+        
+        new_lines = []
+        for line in lines:
+            if not line.strip().startswith(f'{username} :'):
+                new_lines.append(line)
+        
+        with open('/etc/ipsec.secrets', 'w') as f:
+            f.writelines(new_lines)
+        
+        run_cmd("ipsec rereadsecrets", "Обновление секретов")
+        return True
+    except:
+        return False
+
+# БД операции
+def add_user_to_db(telegram_id, username, vpn_username, vpn_password):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    try:
+        cursor.execute('''
+            INSERT INTO users (telegram_id, username, vpn_username, vpn_password, last_seen)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (telegram_id, username, vpn_username, vpn_password, datetime.now()))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
+
+def update_user_last_seen(telegram_id):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('UPDATE users SET last_seen = ? WHERE telegram_id = ?', 
+                   (datetime.now(), telegram_id))
+    conn.commit()
+    conn.close()
+
+def get_all_users():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT telegram_id, username, vpn_username, created_at, last_seen, is_active 
+        FROM users ORDER BY created_at DESC
+    ''')
+    users = cursor.fetchall()
+    conn.close()
+    return users
+
+def delete_user(vpn_username):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM users WHERE vpn_username = ?', (vpn_username,))
+    affected = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return affected > 0
+
+def get_user_by_vpn_username(vpn_username):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM users WHERE vpn_username = ?', (vpn_username,))
+    user = cursor.fetchone()
+    conn.close()
+    return user
+
+# Форматирование времени
+def format_time_ago(dt):
+    if not dt:
+        return "никогда"
+    
+    if isinstance(dt, str):
+        dt = datetime.fromisoformat(dt.replace('Z', '+00:00'))
+    
+    now = datetime.now()
+    diff = now - dt
+    
+    if diff.days > 0:
+        return f"{diff.days} дней назад"
+    elif diff.seconds > 3600:
+        hours = diff.seconds // 3600
+        return f"{hours} часов назад"
+    elif diff.seconds > 60:
+        minutes = diff.seconds // 60
+        return f"{minutes} минут назад"
+    else:
+        return "только что"
+
+# Проверка онлайна (был в сети менее 5 минут назад)
+def is_online(last_seen):
+    if not last_seen:
+        return False
+    if isinstance(last_seen, str):
+        last_seen = datetime.fromisoformat(last_seen.replace('Z', '+00:00'))
+    return (datetime.now() - last_seen).seconds < 300  # 5 минут
 
 # ========== КОМАНДЫ БОТА ==========
 
@@ -60,19 +226,20 @@ def start_command(message):
     
     markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
     btn1 = telebot.types.KeyboardButton("📲 Установить VPN")
-    btn2 = telebot.types.KeyboardButton("🔐 Данные для iPhone")
-    btn3 = telebot.types.KeyboardButton("📊 Статус VPN")
-    markup.add(btn1, btn2, btn3)
+    btn2 = telebot.types.KeyboardButton("👥 Пользователи")
+    btn3 = telebot.types.KeyboardButton("🔐 Мои данные")
+    btn4 = telebot.types.KeyboardButton("📊 Статус VPN")
+    markup.add(btn1, btn2, btn3, btn4)
     
     bot.reply_to(message,
-        "🔐 VPN Бот для iPhone\n\n"
-        "Я установлю IKEv2 VPN на этот сервер и дам настройки для подключения.\n\n"
-        "Нажми кнопку ниже или используй команды:\n"
+        "🔐 VPN Бот с управлением пользователями\n\n"
+        "Основные команды:\n"
         "/install - Установить VPN\n"
-        "/details - Данные для подключения\n"
-        "/status - Проверить работу\n"
-        "/fix - Исправить проблемы\n"
-        "/restart - Перезапустить VPN",
+        "/new @username - Новый пользователь\n"
+        "/users - Список пользователей\n"
+        "/del @username - Удалить пользователя\n"
+        "/status - Статус VPN\n"
+        "/fix - Исправить проблемы",
         reply_markup=markup
     )
 
@@ -81,6 +248,16 @@ def install_command(message):
     if not is_admin(message.from_user.id):
         bot.reply_to(message, "❌ Доступ запрещен!")
         return
+    
+    # Проверяем ОС
+    os_type = check_os()
+    bot.send_message(message.chat.id, f"🖥️ Обнаружена ОС: {os_type.upper()}")
+    
+    if os_type not in ["oracle", "ubuntu", "debian"]:
+        bot.send_message(message.chat.id,
+            "⚠️ Неподдерживаемая ОС. Поддерживаются: Oracle Linux, Ubuntu, Debian\n"
+            "Продолжить установку? (может не сработать)"
+        )
     
     markup = telebot.types.InlineKeyboardMarkup()
     btn_yes = telebot.types.InlineKeyboardButton("✅ Да, устанавливай!", callback_data="install_now")
@@ -135,15 +312,12 @@ def install_vpn(message):
         if code != 0:
             bot.send_message(message.chat.id, 
                 f"⚠️ Проблема с установкой. Пробую другой способ...")
-            # Альтернативная установка
             run_cmd("apt-get install -y strongswan strongswan-pki", "Альт установка")
         
         # Шаг 3: Генерация данных
         bot.send_message(message.chat.id, "🔐 Шаг 3/7: Генерирую ключи и пароли...")
         
         server_ip = get_server_ip()
-        vpn_user = "iphone"
-        vpn_password = generate_password()
         
         # Создаем директории
         run_cmd("mkdir -p /etc/ipsec.d/private /etc/ipsec.d/cacerts /etc/ipsec.d/certs", "Создание директорий")
@@ -217,10 +391,8 @@ conn ikev2-vpn
         with open('/etc/ipsec.conf', 'w') as f:
             f.write(ipsec_conf)
         
-        # Конфиг ipsec.secrets
+        # Создаем базовый файл secrets
         ipsec_secrets = f""": RSA "server-key.pem"
-
-{vpn_user} : EAP "{vpn_password}"
 """
         
         with open('/etc/ipsec.secrets', 'w') as f:
@@ -229,7 +401,6 @@ conn ikev2-vpn
         # Шаг 6: Настройка сети
         bot.send_message(message.chat.id, "🌐 Шаг 6/7: Настраиваю сеть...")
         
-        # Включаем форвардинг
         run_cmd("sysctl -w net.ipv4.ip_forward=1", "IP форвардинг")
         run_cmd('echo "net.ipv4.ip_forward = 1" >> /etc/sysctl.conf', "Сохранение настроек")
         run_cmd("sysctl -p", "Применение настроек")
@@ -256,157 +427,212 @@ iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
         # Шаг 7: Запуск
         bot.send_message(message.chat.id, "🚀 Шаг 7/7: Запускаю VPN...")
         
-        # Останавливаем если запущен
         run_cmd("systemctl stop strongswan 2>/dev/null || true", "Остановка")
         run_cmd("systemctl stop strongswan-starter 2>/dev/null || true", "Остановка стартера")
         
-        # Запускаем
         run_cmd("systemctl enable strongswan-starter", "Включение автозапуска")
         run_cmd("systemctl start strongswan-starter", "Запуск")
         
-        # Ждем и проверяем
         time.sleep(3)
         
         code, out, err = run_cmd("systemctl status strongswan-starter --no-pager", "Проверка статуса")
         
         if "active (running)" in out or "active (running)" in err:
-            # Успех! Сохраняем данные
+            # Успех!
             config_data = {
                 "server_ip": server_ip,
-                "username": vpn_user,
-                "password": vpn_password,
-                "installed": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                "installed": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "os": check_os()
             }
             
             with open('/etc/vpn_config.json', 'w') as f:
-                import json
                 json.dump(config_data, f)
             
-            # Отправляем инструкции
             instructions = f"""✅ **VPN УСПЕШНО УСТАНОВЛЕН!**
 
-📱 **ДАННЫЕ ДЛЯ iPhone:**
+📡 **ДАННЫЕ СЕРВЕРА:**
 Сервер: {server_ip}
 Удаленный ID: {server_ip}
 Локальный ID: (оставить пустым)
 Тип: IKEv2
-Имя пользователя: {vpn_user}
-Пароль: {vpn_password}
 
-📋 **КАК ПОДКЛЮЧИТЬ:**
-1. iPhone → Настройки → Основные → VPN
-2. Нажмите «Добавить конфигурацию VPN»
-3. Выберите «Тип: IKEv2»
-4. Введите данные выше
-5. Нажмите «Готово» и включите VPN
+📋 **Теперь создай пользователей:**
+1. /new @username - создать нового
+2. /users - список всех
 
-🔧 **Если не подключается:**
-- Попробуйте /fix в боте
-- Или /restart для перезапуска
-
-⚠️ **СОХРАНИ ЭТИ ДАННЫЕ!**
-"""
+⚠️ **VPN установлен, но нет пользователей!**
+Создай первого: /new @имя_пользователя"""
             
             bot.send_message(message.chat.id, instructions, parse_mode="Markdown")
             
-            # Отправляем еще раз для копирования
+        else:
+            run_cmd("ipsec start --nofork &", "Альтернативный запуск")
             bot.send_message(message.chat.id,
-                f"📋 **Для быстрого копирования:**\n\n"
-                f"Сервер: `{server_ip}`\n"
-                f"Удаленный ID: `{server_ip}`\n"
-                f"Имя пользователя: `{vpn_user}`\n"
-                f"Пароль: `{vpn_password}`",
+                f"⚠️ VPN установлен, но сервис не запустился.\n"
+                f"IP сервера: `{server_ip}`\n"
+                f"Попробуй /fix или /restart",
                 parse_mode="Markdown"
             )
-            
-        else:
-            # Пробуем альтернативный запуск
-            run_cmd("ipsec start --nofork &", "Альтернативный запуск")
-            time.sleep(2)
-            
-            code2, out2, err2 = run_cmd("ipsec status", "Проверка ipsec")
-            
-            if "Security Associations" in out2:
-                bot.send_message(message.chat.id,
-                    f"✅ VPN запущен (альтернативный метод)\n\n"
-                    f"Сервер: `{server_ip}`\n"
-                    f"Пользователь: `{vpn_user}`\n"
-                    f"Пароль: `{vpn_password}`\n\n"
-                    f"Используй /fix для нормальной установки сервиса.",
-                    parse_mode="Markdown"
-                )
-            else:
-                bot.send_message(message.chat.id,
-                    f"⚠️ VPN установлен, но не запустился автоматически.\n\n"
-                    f"Данные все равно созданы:\n"
-                    f"Сервер: `{server_ip}`\n"
-                    f"Пользователь: `{vpn_user}`\n"
-                    f"Пароль: `{vpn_password}`\n\n"
-                    f"Попробуй:\n"
-                    f"1. /fix - исправить установку\n"
-                    f"2. /restart - перезапустить\n"
-                    f"3. Ручная команда: `sudo systemctl start strongswan-starter`",
-                    parse_mode="Markdown"
-                )
                 
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ Ошибка установки: {str(e)}")
 
-@bot.message_handler(commands=['details'])
+@bot.message_handler(commands=['new'])
+def new_user_command(message):
+    if not is_admin(message.from_user.id):
+        bot.reply_to(message, "❌ Доступ запрещен!")
+        return
+    
+    if not is_vpn_installed():
+        bot.reply_to(message, "❌ VPN не установлен. Сначала /install")
+        return
+    
+    args = message.text.split()
+    if len(args) < 2:
+        bot.reply_to(message, "ℹ️ Использование: /new @username\nПример: /new @ivanov")
+        return
+    
+    username = args[1].replace('@', '').strip()
+    if not username:
+        bot.reply_to(message, "❌ Укажите имя пользователя")
+        return
+    
+    # Генерируем уникальные данные для VPN
+    vpn_username = generate_vpn_username()
+    vpn_password = generate_password()
+    
+    # Добавляем в конфиг VPN
+    if add_vpn_user(vpn_username, vpn_password):
+        # Сохраняем в БД
+        if add_user_to_db(str(message.from_user.id), username, vpn_username, vpn_password):
+            bot.reply_to(message,
+                f"✅ **Пользователь создан!**\n\n"
+                f"👤 TG: @{username}\n"
+                f"🔐 VPN логин: `{vpn_username}`\n"
+                f"🔑 VPN пароль: `{vpn_password}`\n\n"
+                f"📱 **Для iPhone:**\n"
+                f"Сервер: `{get_server_ip()}`\n"
+                f"Удаленный ID: `{get_server_ip()}`\n"
+                f"Тип: IKEv2",
+                parse_mode="Markdown"
+            )
+        else:
+            # Откатываем добавление в VPN если не удалось в БД
+            remove_vpn_user(vpn_username)
+            bot.reply_to(message, "❌ Ошибка сохранения пользователя")
+    else:
+        bot.reply_to(message, "❌ Ошибка создания VPN пользователя")
+
+@bot.message_handler(commands=['users', 'list'])
+def users_command(message):
+    if not is_admin(message.from_user.id):
+        bot.reply_to(message, "❌ Доступ запрещен!")
+        return
+    
+    users = get_all_users()
+    
+    if not users:
+        bot.reply_to(message, "📭 Нет пользователей")
+        return
+    
+    server_ip = get_server_ip()
+    response = f"👥 **ПОЛЬЗОВАТЕЛИ VPN**\n\n"
+    response += f"📡 Сервер: `{server_ip}`\n"
+    response += f"👑 Всего: {len(users)} пользователей\n\n"
+    
+    for user in users:
+        telegram_id, tg_username, vpn_user, created_at, last_seen, is_active = user
+        
+        # Статус онлайна
+        online_status = "🟢 В сети" if is_online(last_seen) else f"⚫ Был: {format_time_ago(last_seen)}"
+        
+        # Дней с создания
+        if isinstance(created_at, str):
+            created = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+        else:
+            created = created_at
+        days = (datetime.now() - created).days
+        
+        response += f"👤 @{tg_username or 'нет'}\n"
+        response += f"   VPN: `{vpn_user}`\n"
+        response += f"   Дней: {days}\n"
+        response += f"   {online_status}\n"
+        response += f"   Создан: {created.strftime('%d.%m.%Y')}\n"
+        response += "   ─────\n"
+    
+    response += "\n📋 Команды:\n"
+    response += "/new @username - добавить\n"
+    response += "/del @username - удалить\n"
+    response += "ℹ️ Удаление по Telegram username"
+    
+    bot.reply_to(message, response, parse_mode="Markdown")
+
+@bot.message_handler(commands=['del', 'delete'])
+def delete_user_command(message):
+    if not is_admin(message.from_user.id):
+        bot.reply_to(message, "❌ Доступ запрещен!")
+        return
+    
+    args = message.text.split()
+    if len(args) < 2:
+        bot.reply_to(message, "ℹ️ Использование: /del @username\nПример: /del @ivanov")
+        return
+    
+    username = args[1].replace('@', '').strip()
+    
+    # Ищем пользователя по Telegram username
+    users = get_all_users()
+    user_to_delete = None
+    
+    for user in users:
+        tg_username = user[1]  # username из БД
+        vpn_username = user[2]  # vpn_username из БД
+        
+        if tg_username == username:
+            user_to_delete = vpn_username
+            break
+    
+    if not user_to_delete:
+        bot.reply_to(message, f"❌ Пользователь @{username} не найден")
+        return
+    
+    # Удаляем из VPN конфига
+    if remove_vpn_user(user_to_delete):
+        # Удаляем из БД
+        if delete_user(user_to_delete):
+            bot.reply_to(message, f"✅ Пользователь @{username} удален")
+        else:
+            bot.reply_to(message, f"⚠️ Удален из VPN, но ошибка БД")
+    else:
+        bot.reply_to(message, f"❌ Ошибка удаления пользователя")
+
+@bot.message_handler(commands=['details', 'my'])
 def details_command(message):
     if not is_admin(message.from_user.id):
         bot.reply_to(message, "❌ Доступ запрещен!")
         return
     
-    try:
-        # Пробуем прочитать сохраненную конфигурацию
-        if os.path.exists('/etc/vpn_config.json'):
-            import json
-            with open('/etc/vpn_config.json', 'r') as f:
-                config = json.load(f)
-            
-            bot.reply_to(message,
-                f"🔐 **Сохраненные данные VPN:**\n\n"
-                f"Сервер: `{config.get('server_ip', 'Неизвестно')}`\n"
-                f"Имя пользователя: `{config.get('username', 'iphone')}`\n"
-                f"Пароль: `{config.get('password', 'Неизвестно')}`\n\n"
-                f"Установлен: {config.get('installed', 'Неизвестно')}",
-                parse_mode="Markdown"
-            )
-        elif os.path.exists('/etc/ipsec.secrets'):
-            # Читаем из файла
-            with open('/etc/ipsec.secrets', 'r') as f:
-                content = f.read()
-            
-            # Ищем данные
-            import re
-            match = re.search(r'(\w+)\s*:\s*EAP\s*"([^"]+)"', content)
-            
-            if match:
-                username = match.group(1)
-                password = match.group(2)
-                server_ip = get_server_ip()
-                
-                bot.reply_to(message,
-                    f"📄 **Данные из конфига:**\n\n"
-                    f"Сервер: `{server_ip}`\n"
-                    f"Имя пользователя: `{username}`\n"
-                    f"Пароль: `{password}`",
-                    parse_mode="Markdown"
-                )
-            else:
-                bot.reply_to(message,
-                    "📁 VPN файлы есть, но не могу найти данные.\n"
-                    "Попробуй /install заново или /fix"
-                )
-        else:
-            bot.reply_to(message,
-                "❌ VPN не установлен.\n"
-                "Используй /install для установки"
-            )
-            
-    except Exception as e:
-        bot.reply_to(message, f"❌ Ошибка: {str(e)}")
+    server_ip = get_server_ip()
+    
+    if not is_vpn_installed():
+        bot.reply_to(message,
+            "❌ VPN не установлен\n"
+            "Используй /install для установки"
+        )
+        return
+    
+    config_info = f"📡 **ИНФОРМАЦИЯ О VPN**\n\n"
+    config_info += f"🖥️ ОС: {check_os().upper()}\n"
+    config_info += f"🌐 IP сервера: `{server_ip}`\n"
+    config_info += f"🔐 Тип: IKEv2/IPsec\n"
+    config_info += f"📊 Пользователей: {len(get_all_users())}\n\n"
+    
+    if os.path.exists('/etc/vpn_config.json'):
+        with open('/etc/vpn_config.json', 'r') as f:
+            config = json.load(f)
+        config_info += f"📅 Установлен: {config.get('installed', 'неизвестно')}\n"
+    
+    bot.reply_to(message, config_info, parse_mode="Markdown")
 
 @bot.message_handler(commands=['status'])
 def status_command(message):
@@ -414,10 +640,8 @@ def status_command(message):
         bot.reply_to(message, "❌ Доступ запрещен!")
         return
     
-    # Проверяем все возможные статусы
     checks = [
         ("strongswan-starter", "systemctl status strongswan-starter --no-pager"),
-        ("strongswan", "systemctl status strongswan --no-pager"),
         ("ipsec", "ipsec status 2>/dev/null || echo 'ipsec не запущен'")
     ]
     
@@ -427,7 +651,7 @@ def status_command(message):
         if "active (running)" in out or "active (running)" in err:
             results.append(f"✅ {name}: работает")
         elif "Security Associations" in out:
-            results.append(f"✅ {name}: работает (ipsec)")
+            results.append(f"✅ {name}: работает")
         else:
             results.append(f"❌ {name}: не работает")
     
@@ -438,12 +662,8 @@ def status_command(message):
     else:
         results.append("⚠️ Порт 500/4500: не слушает")
     
-    # Собираем сообщение
     status_msg = "📊 **Статус VPN:**\n\n" + "\n".join(results)
-    
-    # Добавляем рекомендации
-    if "не работает" in status_msg:
-        status_msg += "\n\n🔧 Попробуй:\n/fix - исправить проблемы\n/restart - перезапустить"
+    status_msg += f"\n\n👥 Пользователей: {len(get_all_users())}"
     
     bot.reply_to(message, status_msg, parse_mode="Markdown")
 
@@ -460,28 +680,21 @@ def fix_command(message):
         ("Переустанавливаю StrongSwan", "apt-get install --reinstall -y strongswan strongswan-starter"),
         ("Включаю автозапуск", "systemctl enable strongswan-starter"),
         ("Запускаю VPN", "systemctl start strongswan-starter"),
-        ("Проверяю конфиги", "ipsec rereadall 2>/dev/null || true"),
+        ("Обновляю конфиги", "ipsec rereadall 2>/dev/null || true"),
         ("Перезагружаю службу", "systemctl restart strongswan-starter")
     ]
     
     for desc, cmd in fix_commands:
         code, out, err = run_cmd(cmd)
-        if code == 0:
-            bot.send_message(message.chat.id, f"✓ {desc}")
-        else:
-            bot.send_message(message.chat.id, f"⚠️ {desc} - проблемы")
         time.sleep(1)
     
-    # Проверяем результат
     code, out, err = run_cmd("systemctl status strongswan-starter --no-pager")
     if "active (running)" in out:
         bot.send_message(message.chat.id, "✅ VPN исправлен и запущен!")
     else:
         bot.send_message(message.chat.id,
             "⚠️ Есть проблемы с запуском.\n"
-            "Попробуй:\n"
-            "1. /restart\n"
-            "2. Или установи заново: /install"
+            "Попробуй /restart или переустанови: /install"
         )
 
 @bot.message_handler(commands=['restart'])
@@ -503,11 +716,16 @@ def restart_command(message):
     else:
         bot.reply_to(message, "❌ VPN не запустился. Попробуй /fix")
 
+# Обработчики кнопок
 @bot.message_handler(func=lambda message: message.text == "📲 Установить VPN")
 def button_install(message):
     install_command(message)
 
-@bot.message_handler(func=lambda message: message.text == "🔐 Данные для iPhone")
+@bot.message_handler(func=lambda message: message.text == "👥 Пользователи")
+def button_users(message):
+    users_command(message)
+
+@bot.message_handler(func=lambda message: message.text == "🔐 Мои данные")
 def button_details(message):
     details_command(message)
 
@@ -521,36 +739,41 @@ def handle_all(message):
         bot.reply_to(message, "❌ Доступ запрещен!")
         return
     
+    # Обновляем время последней активности
+    update_user_last_seen(str(message.from_user.id))
+    
     markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
     btn1 = telebot.types.KeyboardButton("📲 Установить VPN")
-    btn2 = telebot.types.KeyboardButton("🔐 Данные для iPhone")
-    btn3 = telebot.types.KeyboardButton("📊 Статус VPN")
-    markup.add(btn1, btn2, btn3)
+    btn2 = telebot.types.KeyboardButton("👥 Пользователи")
+    btn3 = telebot.types.KeyboardButton("🔐 Мои данные")
+    btn4 = telebot.types.KeyboardButton("📊 Статус VPN")
+    markup.add(btn1, btn2, btn3, btn4)
     
     bot.reply_to(message,
         "🤔 Не понял команду\n\n"
-        "Доступные команды:\n"
-        "/start - Показать меню\n"
+        "📋 **Основные команды:**\n"
         "/install - Установить VPN\n"
-        "/details - Данные для iPhone\n"
-        "/status - Проверить VPN\n"
-        "/fix - Исправить проблемы\n"
-        "/restart - Перезапустить VPN\n\n"
+        "/new @username - Создать пользователя\n"
+        "/users - Список пользователей\n"
+        "/del @username - Удалить пользователя\n"
+        "/status - Статус VPN\n"
+        "/fix - Исправить проблемы\n\n"
         "Или используй кнопки ниже",
         reply_markup=markup
     )
 
 # ========== ЗАПУСК БОТА ==========
 if __name__ == "__main__":
-    print("🤖 VPN Бот запускается...")
+    print("🤖 VPN Бот с управлением пользователями запускается...")
     print(f"👑 Админ ID: {ADMIN_ID}")
+    print(f"💾 База данных: {DB_FILE}")
     print("📱 Бот ждет команды /start в Telegram")
     
-    # Проверяем что ADMIN_ID заменен
-    if ADMIN_ID == "ВАШ_ТЕЛЕГРАМ_АЙДИ":
-        print("⚠️ ВНИМАНИЕ: Не установлен ADMIN_ID!")
-        print("Замени 'ВАШ_ТЕЛЕГРАМ_АЙДИ' на строке 12 на свой Telegram ID")
-        print("Узнать ID: напиши /start боту @userinfobot")
+    # Проверяем что VPN установлен
+    if is_vpn_installed():
+        print("✅ VPN уже установлен")
+    else:
+        print("⚠️ VPN не установлен. Используй /install")
     
     # Запускаем бота
     try:
