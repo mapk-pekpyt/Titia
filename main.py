@@ -7,11 +7,13 @@ import time
 from datetime import datetime
 
 # ========== НАСТРОЙКИ ==========
-TOKEN = "ВАШ_ТОКЕН_ОТ_BOTFATHER"  # Замени на токен от @BotFather
-ADMIN_ID = "ВАШ_TELEGRAM_ID"      # Замени на свой ID (узнать у @userinfobot)
-# ===============================
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+if not TOKEN:
+    raise RuntimeError("Нет TELEGRAM_BOT_TOKEN в окружении")
 
 bot = telebot.TeleBot(TOKEN)
+ADMIN_ID = "ВАШ_ТЕЛЕГРАМ_АЙДИ"  # Замени на свой ID (узнать у @userinfobot)
+# ===============================
 
 # Проверка админа
 def is_admin(user_id):
@@ -519,6 +521,12 @@ def handle_all(message):
         bot.reply_to(message, "❌ Доступ запрещен!")
         return
     
+    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+    btn1 = telebot.types.KeyboardButton("📲 Установить VPN")
+    btn2 = telebot.types.KeyboardButton("🔐 Данные для iPhone")
+    btn3 = telebot.types.KeyboardButton("📊 Статус VPN")
+    markup.add(btn1, btn2, btn3)
+    
     bot.reply_to(message,
         "🤔 Не понял команду\n\n"
         "Доступные команды:\n"
@@ -529,13 +537,7 @@ def handle_all(message):
         "/fix - Исправить проблемы\n"
         "/restart - Перезапустить VPN\n\n"
         "Или используй кнопки ниже",
-        reply_markup=telebot.types.ReplyKeyboardMarkup(
-            resize_keyboard=True
-        ).add(
-            telebot.types.KeyboardButton("📲 Установить VPN"),
-            telebot.types.KeyboardButton("🔐 Данные для iPhone"),
-            telebot.types.KeyboardButton("📊 Статус VPN")
-        )
+        reply_markup=markup
     )
 
 # ========== ЗАПУСК БОТА ==========
@@ -544,15 +546,11 @@ if __name__ == "__main__":
     print(f"👑 Админ ID: {ADMIN_ID}")
     print("📱 Бот ждет команды /start в Telegram")
     
-    # Проверяем токен
-    if TOKEN == "ВАШ_ТОКЕН_ОТ_BOTFATHER":
-        print("❌ ОШИБКА: Не установлен токен бота!")
-        print("Замени TOKEN в коде на свой токен от @BotFather")
-        exit(1)
-    
-    if ADMIN_ID == "ВАШ_TELEGRAM_ID":
+    # Проверяем что ADMIN_ID заменен
+    if ADMIN_ID == "ВАШ_ТЕЛЕГРАМ_АЙДИ":
         print("⚠️ ВНИМАНИЕ: Не установлен ADMIN_ID!")
-        print("Замени ADMIN_ID на свой Telegram ID")
+        print("Замени 'ВАШ_ТЕЛЕГРАМ_АЙДИ' на строке 12 на свой Telegram ID")
+        print("Узнать ID: напиши /start боту @userinfobot")
     
     # Запускаем бота
     try:
@@ -561,4 +559,3 @@ if __name__ == "__main__":
         print(f"❌ Ошибка бота: {e}")
         print("Перезапускаю через 5 секунд...")
         time.sleep(5)
-        os.execv(__file__, sys.argv)
