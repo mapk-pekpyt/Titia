@@ -10,7 +10,7 @@ if not TOKEN:
     raise RuntimeError("Нет TELEGRAM_BOT_TOKEN в окружении")
 
 bot = telebot.TeleBot(TOKEN)
-ADMIN_ID = "ВАШ_ТЕЛЕГРАМ_АЙДИ"  # Замените на ваш ID
+ADMIN_ID = "5791171535"  # Замените на ваш ID
 
 # Проверка админа
 def is_admin(user_id):
