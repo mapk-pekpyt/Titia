@@ -25,7 +25,7 @@ async def main():
     init_db()
     
     # Инициализация бота
-    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
     
     # Регистрация роутеров
