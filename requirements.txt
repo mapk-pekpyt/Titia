@@ -1,16 +1,7 @@
-# Основные зависимости
-python-telegram-bot==21.7  # Последняя стабильная мажорная версия
-paramiko==3.4.0  # SSH подключения
-cryptography==42.0.5  # Безопасность, обязательна для paramiko
-python-dotenv==1.0.0  # Переменные окружения
-
-# Асинхронность и HTTP
-aiohttp==3.9.5  # Асинхронные HTTP запросы
-aiosqlite==0.19.0  # Асинхронная работа с SQLite
-
-# Дополнительно
-APScheduler==3.10.4  # Планировщик задач
-redis==5.0.6  # Кэш и сессии
-pydantic==2.6.4  # Валидация данных
-httpx==0.27.0  # HTTP клиент (альтернатива aiohttp)
-tenacity==8.2.3  # Повторные попытки при ошибках
+aiogram==3.12.0
+paramiko==3.4.0
+asyncssh==2.14.2
+aiofiles==23.2.1
+python-dotenv==1.0.0
+redis==5.0.1
+sqlite3
