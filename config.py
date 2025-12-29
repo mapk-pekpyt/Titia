@@ -3,7 +3,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = 5791171535
 ADMIN_CHAT_ID = -1003542769962
 SUPPORT_USERNAME = "@vpnhostik"
