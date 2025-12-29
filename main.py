@@ -1,10 +1,15 @@
 import asyncio
 import logging
+import os
+from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-from config import BOT_TOKEN, ADMIN_ID
+load_dotenv()  # Загружаем .env
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # Получаем токен
+
+from config import ADMIN_ID
 from database import init_db
 from handlers import admin, user, server
 from utils.monitoring import start_monitoring
