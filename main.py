@@ -30,6 +30,7 @@ async def main():
     init_db()
     
     # Инициализация бота
+    bot = Bot(token=BOT_TOKEN)  # ← ДОБАВЬ ЭТУ СТРОКУ
     dp = Dispatcher()
     
     # Регистрация роутеров
