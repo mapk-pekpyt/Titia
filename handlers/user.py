@@ -1,10 +1,16 @@
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import CommandStart, Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from config import ADMIN_ID
 from keyboards import user_main_menu, tariffs_menu, admin_main_menu
 
 router = Router()
+
+class TariffSelection(StatesGroup):
+    server_choice = State()
+    confirmation = State()
 
 @router.message(CommandStart())
 async def start_command(message: Message):
@@ -30,7 +36,17 @@ async def support(message: Message):
     await message.answer("По всем вопросам обращайтесь: @vpnhostik")
 
 @router.callback_query(F.data.startswith("tariff_"))
-async def process_tariff(callback: CallbackQuery):
+async def process_tariff(callback: CallbackQuery, state: FSMContext):
     tariff = callback.data.split("_")[1]
+    await state.update_data(tariff=tariff)
     await callback.answer(f"Выбран тариф: {tariff}")
-    # Дополнительная логика выбора тарифа
+    
+    # Здесь будет выбор сервера из доступных
+    await callback.message.answer("Выбор сервера в разработке...")
+    # Показываем реквизиты оплаты
+    await callback.message.answer(
+        "💳 Для оплаты переведите на карту:\n"
+        "2200 1234 5678 9010\n\n"
+        "После оплаты отправьте скриншот @vpnhostik"
+    )
+    await state.clear()
