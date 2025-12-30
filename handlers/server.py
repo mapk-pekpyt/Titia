@@ -1,21 +1,31 @@
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, FSInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from keyboards import auth_type_menu, servers_menu
 import sqlite3
+import asyncio
+from utils.ssh_client import SSHClient
+from utils.vpn_installer import VPNInstaller
 from config import DB_PATH
+import os
+import tempfile
 
 router = Router()
 
 class ServerAdd(StatesGroup):
+    server_name = State()
     auth_type = State()
     host = State()
     port = State()
     username = State()
     password = State()
     ssh_key = State()
+
+class ServerEdit(StatesGroup):
+    edit_name = State()
+    edit_max_users = State()
 
 def back_button():
     return ReplyKeyboardMarkup(
@@ -25,7 +35,18 @@ def back_button():
 
 @router.callback_query(F.data == "add_server")
 async def add_server_start(callback: CallbackQuery, state: FSMContext):
-    await callback.message.answer("Выберите тип аутентификации:", reply_markup=auth_type_menu())
+    await callback.message.answer("Введите имя для сервера (например: Германия #1):", reply_markup=back_button())
+    await state.set_state(ServerAdd.server_name)
+
+@router.message(ServerAdd.server_name)
+async def process_server_name(message: Message, state: FSMContext):
+    if message.text == "⬅️ Назад":
+        await message.answer("Управление серверами:", reply_markup=servers_menu())
+        await state.clear()
+        return
+    
+    await state.update_data(server_name=message.text)
+    await message.answer("Выберите тип аутентификации:", reply_markup=auth_type_menu())
     await state.set_state(ServerAdd.auth_type)
 
 @router.callback_query(F.data.in_(["auth_key", "auth_password"]))
@@ -38,13 +59,12 @@ async def process_auth_type(callback: CallbackQuery, state: FSMContext):
 @router.message(ServerAdd.host)
 async def process_host(message: Message, state: FSMContext):
     if message.text == "⬅️ Назад":
-        await message.answer("Выберите тип аутентификации:", reply_markup=auth_type_menu())
-        await state.set_state(ServerAdd.auth_type)
+        await message.answer("Введите имя для сервера:", reply_markup=back_button())
+        await state.set_state(ServerAdd.server_name)
         return
     
     await state.update_data(host=message.text)
     
-    # Кнопки для порта
     markup = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="22 (стандартный)")],
@@ -99,7 +119,7 @@ async def process_username(message: Message, state: FSMContext):
         await message.answer("Введите пароль SSH:", reply_markup=back_button())
         await state.set_state(ServerAdd.password)
     else:
-        await message.answer("Отправьте текст SSH ключа (в формате PEM):", reply_markup=back_button())
+        await message.answer("Отправьте файл с SSH ключом (формат PEM):", reply_markup=back_button())
         await state.set_state(ServerAdd.ssh_key)
 
 @router.message(ServerAdd.password)
@@ -112,37 +132,82 @@ async def process_password(message: Message, state: FSMContext):
     await state.update_data(password=message.text)
     await finish_server_add(message, state)
 
-@router.message(ServerAdd.ssh_key)
-async def process_ssh_key(message: Message, state: FSMContext):
-    if message.text == "⬅️ Назад":
-        await message.answer("Введите имя пользователя SSH:", reply_markup=back_button())
-        await state.set_state(ServerAdd.username)
-        return
-    
-    await state.update_data(ssh_key=message.text)
-    await finish_server_add(message, state)
+@router.message(F.document, ServerAdd.ssh_key)
+async def process_ssh_key_file(message: Message, state: FSMContext, bot):
+    if message.document:
+        file = await bot.download(message.document)
+        key_content = file.read().decode('utf-8')
+        await state.update_data(ssh_key=key_content)
+        await finish_server_add(message, state)
+    else:
+        await message.answer("Пожалуйста, отправьте файл с ключом.")
 
 async def finish_server_add(message: Message, state: FSMContext):
     data = await state.get_data()
-    # Сохранение в БД
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO servers (host, port, username, password, ssh_key, auth_type)
-        VALUES (?, ?, ?, ?, ?, ?)
-    ''', (data['host'], data.get('port', 22), data['username'], 
-          data.get('password'), data.get('ssh_key'), data['auth_type']))
-    conn.commit()
-    conn.close()
+    server_name = data.get('server_name', 'Без имени')
     
-    await message.answer(f"✅ Сервер {data['host']} добавлен!", reply_markup=ReplyKeyboardRemove())
+    await message.answer("⏳ Подключаюсь к серверу...")
+    
+    # Подключение и установка
+    ssh = SSHClient(
+        data['host'],
+        data.get('port', 22),
+        data['username'],
+        data.get('password'),
+        data.get('ssh_key')
+    )
+    
+    connected = await ssh.connect()
+    if not connected:
+        await message.answer("❌ Не удалось подключиться по SSH.")
+        ssh.close()
+        await state.clear()
+        return
+    
+    await message.answer("✅ SSH подключение установлено. Начинаю установку VPN...")
+    
+    installer = VPNInstaller(ssh)
+    result = await installer.install_xui()
+    
+    ssh.close()
+    
+    if result['success']:
+        # Сохранение в БД
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO servers 
+            (server_name, host, port, username, password, ssh_key, auth_type, 
+             panel_url, panel_username, panel_password, max_users)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 100)
+        ''', (
+            server_name, data['host'], data.get('port', 22), data['username'],
+            data.get('password'), data.get('ssh_key'), data['auth_type'],
+            result['panel_url'], result['username'], result['password']
+        ))
+        server_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        
+        await message.answer(
+            f"✅ Сервер '{server_name}' успешно добавлен!\n\n"
+            f"IP: {data['host']}\n"
+            f"Панель управления: {result['panel_url']}\n"
+            f"Логин: {result['username']}\n"
+            f"Пароль: {result['password']}\n\n"
+            f"Макс. пользователей: 100 (можно изменить в управлении)",
+            reply_markup=ReplyKeyboardRemove()
+        )
+    else:
+        await message.answer(f"❌ Ошибка установки: {result.get('error', 'Неизвестная ошибка')}")
+    
     await state.clear()
 
 @router.callback_query(F.data == "list_servers")
 async def list_servers(callback: CallbackQuery):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT id, host, status FROM servers")
+    cursor.execute("SELECT id, server_name, host, current_users, max_users, status FROM servers")
     servers = cursor.fetchall()
     conn.close()
     
@@ -152,10 +217,129 @@ async def list_servers(callback: CallbackQuery):
     
     text = "📋 Список серверов:\n\n"
     for server in servers:
-        text += f"ID: {server[0]}\nХост: {server[1]}\nСтатус: {server[2]}\n\n"
+        text += (
+            f"ID: {server[0]}\n"
+            f"Имя: {server[1]}\n"
+            f"Хост: {server[2]}\n"
+            f"Пользователи: {server[3]}/{server[4]}\n"
+            f"Статус: {server[5]}\n\n"
+        )
     
     await callback.message.answer(text)
 
-@router.callback_query(F.data == "manage_servers")
-async def manage_servers(callback: CallbackQuery):
-    await callback.message.answer("Функционал управления серверами в разработке.")
+@router.callback_query(F.data.startswith("manage_"))
+async def manage_server(callback: CallbackQuery):
+    server_id = callback.data.split("_")[1]
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Сменить имя", callback_data=f"edit_name_{server_id}")],
+        [InlineKeyboardButton(text="👥 Изменить макс. пользователей", callback_data=f"edit_max_{server_id}")],
+        [InlineKeyboardButton(text="📡 Пинг сервера", callback_data=f"ping_{server_id}")],
+        [InlineKeyboardButton(text="🔗 Получить ссылку на панель", callback_data=f"panel_{server_id}")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="list_servers")]
+    ])
+    
+    await callback.message.answer("Управление сервером:", reply_markup=keyboard)
+
+@router.callback_query(F.data.startswith("edit_name_"))
+async def edit_name_start(callback: CallbackQuery, state: FSMContext):
+    server_id = callback.data.split("_")[2]
+    await state.update_data(server_id=server_id)
+    await callback.message.answer("Введите новое имя для сервера:", reply_markup=back_button())
+    await state.set_state(ServerEdit.edit_name)
+
+@router.message(ServerEdit.edit_name)
+async def process_edit_name(message: Message, state: FSMContext):
+    if message.text == "⬅️ Назад":
+        await message.answer("Управление сервером отменено.")
+        await state.clear()
+        return
+    
+    data = await state.get_data()
+    server_id = data['server_id']
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE servers SET server_name = ? WHERE id = ?", (message.text, server_id))
+    conn.commit()
+    conn.close()
+    
+    await message.answer(f"✅ Имя сервера изменено на: {message.text}")
+    await state.clear()
+
+@router.callback_query(F.data.startswith("edit_max_"))
+async def edit_max_start(callback: CallbackQuery, state: FSMContext):
+    server_id = callback.data.split("_")[2]
+    await state.update_data(server_id=server_id)
+    await callback.message.answer("Введите новое максимальное количество пользователей:", reply_markup=back_button())
+    await state.set_state(ServerEdit.edit_max_users)
+
+@router.message(ServerEdit.edit_max_users)
+async def process_edit_max_users(message: Message, state: FSMContext):
+    if message.text == "⬅️ Назад":
+        await message.answer("Управление сервером отменено.")
+        await state.clear()
+        return
+    
+    if not message.text.isdigit():
+        await message.answer("Введите число!")
+        return
+    
+    data = await state.get_data()
+    server_id = data['server_id']
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE servers SET max_users = ? WHERE id = ?", (int(message.text), server_id))
+    conn.commit()
+    conn.close()
+    
+    await message.answer(f"✅ Макс. пользователей изменено на: {message.text}")
+    await state.clear()
+
+@router.callback_query(F.data.startswith("ping_"))
+async def ping_server(callback: CallbackQuery):
+    server_id = callback.data.split("_")[1]
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT host, port, username, password, ssh_key FROM servers WHERE id = ?", (server_id,))
+    server = cursor.fetchone()
+    conn.close()
+    
+    if not server:
+        await callback.answer("Сервер не найден!")
+        return
+    
+    host, port, username, password, ssh_key = server
+    
+    await callback.message.answer("⏳ Проверяю подключение...")
+    
+    ssh = SSHClient(host, port, username, password, ssh_key)
+    connected = await ssh.connect()
+    ssh.close()
+    
+    if connected:
+        await callback.message.answer("✅ Сервер доступен!")
+    else:
+        await callback.message.answer("❌ Сервер недоступен!")
+
+@router.callback_query(F.data.startswith("panel_"))
+async def get_panel_link(callback: CallbackQuery):
+    server_id = callback.data.split("_")[1]
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT panel_url, panel_username, panel_password FROM servers WHERE id = ?", (server_id,))
+    panel = cursor.fetchone()
+    conn.close()
+    
+    if panel and panel[0]:
+        await callback.message.answer(
+            f"🔗 Панель управления:\n"
+            f"URL: {panel[0]}\n"
+            f"Логин: {panel[1]}\n"
+            f"Пароль: {panel[2]}"
+        )
+    else:
+        await callback.message.answer("❌ Данные панели не найдены.")
