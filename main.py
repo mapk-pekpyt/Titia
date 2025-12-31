@@ -1,51 +1,45 @@
-import asyncio
-import logging
 import os
-from dotenv import load_dotenv
-from aiogram import Bot, Dispatcher
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
-
-load_dotenv()  # Загружаем .env
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # Получаем токен
-
-from config import ADMIN_ID
+import logging
+from aiogram import Bot, Dispatcher, types
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.types import ParseMode
+from aiogram.utils import executor
+from config import BOT_TOKEN, ADMIN_ID, TRIBUTE_WEBHOOK_PATH
 from database import init_db
-from handlers import admin, user, server
-from utils.monitoring import start_monitoring
+import handlers.admin as admin_handlers
+import handlers.user as user_handlers
 
 # Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.FileHandler("bot.log"),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
-async def main():
-    # Инициализация БД
-    init_db()
-    
-    # Инициализация бота
-    bot = Bot(token=BOT_TOKEN)  # ← ДОБАВЬ ЭТУ СТРОКУ
-    dp = Dispatcher()
-    
-    # Регистрация роутеров
-    dp.include_router(admin.router)
-    dp.include_router(user.router)
-    dp.include_router(server.router)
-    
-    # Запуск мониторинга серверов
-    asyncio.create_task(start_monitoring(bot))
-    
-    # Приветственное сообщение админу
-    await bot.send_message(ADMIN_ID, "🤖 VPN Bot запущен и готов к работе!")
-    
-    # Запуск поллинга
-    await dp.start_polling(bot)
+# Проверка токена
+if not BOT_TOKEN:
+    logging.error("Не указан BOT_TOKEN в переменных окружения!")
+    exit(1)
 
-if __name__ == "__main__":
-    asyncio.run(main())
+bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
+storage = MemoryStorage()
+dp = Dispatcher(bot, storage=storage)
+
+# Регистрация обработчиков
+admin_handlers.register_admin_handlers(dp)
+user_handlers.register_user_handlers(dp)
+
+# Инициализация БД при старте
+init_db()
+
+async def on_startup(dp):
+    logging.info("Бот запущен")
+    
+    # Уведомление админу
+    try:
+        await bot.send_message(ADMIN_ID, "🤖 Бот запущен и готов к работе!")
+    except:
+        pass
+
+async def on_shutdown(dp):
+    logging.info("Бот остановлен")
+
+if __name__ == '__main__':
+    # Для локального запуска (без вебхука)
+    executor.start_polling(dp, on_startup=on_startup, on_shutdown=on_shutdown)
