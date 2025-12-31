@@ -2,11 +2,7 @@ from aiogram import types, Dispatcher
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 from config import ADMIN_ID
-from database import init_db
 import sqlite3
-
-# Удаляем проблемный импорт get_db
-# Вместо этого используем прямое подключение
 
 class AddServer(StatesGroup):
     host = State()
@@ -19,7 +15,6 @@ class AddServer(StatesGroup):
 async def admin_start(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
-    # Импортируем здесь, чтобы избежать циклического импорта
     from keyboards import admin_main_kb
     await message.answer("👑 Админ-панель", reply_markup=admin_main_kb)
 
@@ -42,7 +37,6 @@ async def admin_stats(message: types.Message):
     conn = sqlite3.connect('vpn_bot.db')
     cursor = conn.cursor()
     
-    # Статистика
     cursor.execute("SELECT COUNT(*) FROM servers WHERE status='active'")
     servers = cursor.fetchone()[0]
     
@@ -66,8 +60,14 @@ async def admin_stats(message: types.Message):
     conn.close()
     await message.answer(stats)
 
+async def admin_back(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    from keyboards import admin_main_kb
+    await message.answer("👑 Админ-панель", reply_markup=admin_main_kb)
+
 def register_admin_handlers(dp: Dispatcher):
-    dp.register_message_handler(admin_start, commands=['admin'], user_id=ADMIN_ID)
     dp.register_message_handler(admin_servers, text='🖥 Сервера', user_id=ADMIN_ID)
     dp.register_message_handler(admin_users, text='👥 Пользователи', user_id=ADMIN_ID)
     dp.register_message_handler(admin_stats, text='📊 Статистика', user_id=ADMIN_ID)
+    dp.register_message_handler(admin_back, text='🔙 Назад', user_id=ADMIN_ID)
