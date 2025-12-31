@@ -21,6 +21,9 @@ def init_db():
             max_users INTEGER DEFAULT 50,
             current_users INTEGER DEFAULT 0,
             status TEXT DEFAULT 'active',
+            ram_info TEXT,
+            cpu_info TEXT,
+            disk_info TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
@@ -64,24 +67,12 @@ def init_db():
         )
     ''')
     
-    #  servers:
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS servers (
-            ...
-            ram_info TEXT,
-            cpu_info TEXT,
-            disk_info TEXT,
-            ...
-        )
-    ''')
-    
     conn.commit()
     conn.close()
 
 def get_db():
-    """Получить соединение с БД"""
     return sqlite3.connect(DB_PATH)
 
 if __name__ == '__main__':
     init_db()
-    print("База данных инициализирована")
+    print("✅ База данных инициализирована")
