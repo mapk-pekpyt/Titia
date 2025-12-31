@@ -140,18 +140,44 @@ async def process_ssh_key_file(message: types.Message, state: FSMContext):
         return
     
     if not message.document:
-        await message.answer("❌ Отправьте файл ключа", reply_markup=back_kb())
+        await message.answer("❌ Отправьте файл ключа (.pem, .key)", reply_markup=back_kb())
         return
     
-    # Просто читаем как текст
-    file = await message.document.get_file()
-    file_bytes = await message.bot.download_file(file.file_path)
-    key_content = file_bytes.decode('utf-8')
-    
-    async with state.proxy() as data:
-        data['ssh_key'] = key_content
-    
-    await connect_and_install(message, state)
+    try:
+        # Скачиваем файл
+        file = await message.bot.get_file(message.document.file_id)
+        
+        # Создаем временный файл
+        import tempfile
+        import os
+        
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.pem') as tmp_file:
+            # Скачиваем и записываем содержимое
+            file_content = await message.bot.download_file(file.file_path)
+            
+            # Преобразуем BytesIO в строку
+            if hasattr(file_content, 'getvalue'):
+                content = file_content.getvalue().decode('utf-8')
+            else:
+                content = file_content.read().decode('utf-8') if hasattr(file_content, 'read') else str(file_content)
+            
+            tmp_file.write(content)
+            temp_path = tmp_file.name
+        
+        # Читаем ключ из временного файла
+        with open(temp_path, 'r') as f:
+            key_content = f.read()
+        
+        # Удаляем временный файл
+        os.unlink(temp_path)
+        
+        async with state.proxy() as data:
+            data['ssh_key'] = key_content
+        
+        await connect_and_install(message, state)
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка обработки файла: {str(e)}", reply_markup=back_kb())
 # Подключение и установка
 async def connect_and_install(message: types.Message, state: FSMContext):
     from keyboards import admin_main_kb
