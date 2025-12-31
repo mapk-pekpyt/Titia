@@ -3,22 +3,19 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-ADMIN_ID = 5791171535
-ADMIN_CHAT_ID = -1003542769962
-SUPPORT_USERNAME = "@vpnhostik"
+BOT_TOKEN = os.getenv('BOT_TOKEN')
+ADMIN_ID = int(os.getenv('ADMIN_ID', 5791171535))
+ADMIN_CHAT_ID = int(os.getenv('ADMIN_CHAT_ID', -1003542769962))
+SUPPORT_USERNAME = os.getenv('SUPPORT_USERNAME', '@vpnhostik')
+
+# Настройки Tribute
+TRIBUTE_API_KEY = '42d4d099-20fd-4f55-a196-d77d9fed'
+TRIBUTE_WEBHOOK_PATH = '/tribute_webhook'
+TRIBUTE_PRODUCTS = {
+    'week': {'id': 'poWz', 'price': 100, 'days': 7},
+    'month': {'id': 'poX4', 'price': 250, 'days': 30},
+    '2months': {'id': 'poX5', 'price': 450, 'days': 60}
+}
 
 # Пути
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "data")
-DB_PATH = os.path.join(DATA_DIR, "database.db")
-
-# Создаём папку data
-os.makedirs(DATA_DIR, exist_ok=True)
-
-# Тарифы (в рублях)
-TARIFFS = {
-    "trial": {"name": "Пробный день", "price": 0, "days": 1},
-    "week": {"name": "Неделя", "price": 100, "days": 7},
-    "month": {"name": "Месяц", "price": 250, "days": 30},
-    "2months": {"name": "2 месяца", "price": 450, "days": 60}
-}
+DB_PATH = 'vpn_bot.db'
