@@ -1,82 +1,76 @@
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
-# Кнопка "Назад" для Reply
-def back_button():
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="⬅️ Назад")]],
-        resize_keyboard=True
-    )
+# Главное меню админа
+admin_main_kb = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+admin_main_kb.add(
+    KeyboardButton('🖥 Сервера'),
+    KeyboardButton('👥 Пользователи'),
+    KeyboardButton('📊 Статистика'),
+    KeyboardButton('💰 Метод оплаты')
+)
+
+# Меню серверов
+admin_servers_kb = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+admin_servers_kb.add(
+    KeyboardButton('➕ Добавить сервер'),
+    KeyboardButton('📋 Список серверов'),
+    KeyboardButton('⚙️ Управление серверами'),
+    KeyboardButton('🔙 Назад')
+)
+
+# Меню пользователей
+admin_users_kb = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+admin_users_kb.add(
+    KeyboardButton('🎁 Выдать VPN'),
+    KeyboardButton('🚫 Отключить VPN'),
+    KeyboardButton('🔙 Назад')
+)
+
+# Меню управления сервером
+server_manage_kb = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+server_manage_kb.add(
+    KeyboardButton('✏️ Сменить имя'),
+    KeyboardButton('👥 Изменить лимит'),
+    KeyboardButton('📡 Пинг сервера'),
+    KeyboardButton('🔙 Назад')
+)
 
 # Главное меню пользователя
-def user_main_menu():
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🛡️ Получить VPN")],
-            [KeyboardButton(text="📊 Моя подписка"), KeyboardButton(text="🆘 Поддержка")]
-        ],
-        resize_keyboard=True
-    )
-
-# Главное меню админа
-def admin_main_menu():
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="🖥️ Серверы")],
-            [KeyboardButton(text="💰 Реквизиты оплаты"), KeyboardButton(text="📝 Логи")],
-            [KeyboardButton(text="👤 Пользователи"), KeyboardButton(text="🆘 Поддержка")]
-        ],
-        resize_keyboard=True
-    )
-
-# Меню серверов (добавлена кнопка "Назад")
-def servers_menu():
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="➕ Добавить сервер", callback_data="add_server")],
-            [InlineKeyboardButton(text="📋 Список серверов", callback_data="list_servers")],
-            [InlineKeyboardButton(text="⚙️ Управление", callback_data="manage_servers")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")]
-        ]
-    )
-
-# Выбор типа аутентификации
-def auth_type_menu():
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🔑 По ключу (SSH Key)", callback_data="auth_key")],
-            [InlineKeyboardButton(text="🔓 По паролю", callback_data="auth_password")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="servers_back")]
-        ]
-    )
+user_main_kb = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+user_main_kb.add(
+    KeyboardButton('🔑 Получить VPN'),
+    KeyboardButton('📄 Моя подписка'),
+    KeyboardButton('🆘 Помощь')
+)
 
 # Тарифы
-def tariffs_menu():
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="1 день (пробный)", callback_data="tariff_trial")],
-            [InlineKeyboardButton(text="1 неделя - 100₽", callback_data="tariff_week")],
-            [InlineKeyboardButton(text="1 месяц - 250₽", callback_data="tariff_month")],
-            [InlineKeyboardButton(text="2 месяца - 450₽", callback_data="tariff_2months")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="user_back")]
-        ]
-    )
+tariffs_kb = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+tariffs_kb.add(
+    KeyboardButton('🎁 Пробник (1 день)'),
+    KeyboardButton('📅 Неделя - 100₽'),
+    KeyboardButton('📅 Месяц - 250₽'),
+    KeyboardButton('📅 2 месяца - 450₽'),
+    KeyboardButton('🔙 Назад')
+)
 
-# Подтверждение оплаты
-def payment_confirm_menu(sub_id):
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Подтвердить оплату", callback_data=f"confirm_{sub_id}")],
-            [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject_{sub_id}")]
-        ]
-    )
+# Кнопка "Назад" отдельно
+back_kb = ReplyKeyboardMarkup(resize_keyboard=True).add(KeyboardButton('🔙 Назад'))
 
-# Управление сервером
-def server_management_menu(server_id):
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🔗 Получить ссылку на панель", callback_data=f"panel_{server_id}")],
-            [InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"edit_{server_id}")],
-            [InlineKeyboardButton(text="🗑️ Удалить", callback_data=f"delete_{server_id}")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="list_servers")]
-        ]
+# Inline кнопки для подтверждения
+def confirm_kb(action):
+    kb = InlineKeyboardMarkup()
+    kb.add(
+        InlineKeyboardButton('✅ Да', callback_data=f'confirm_{action}'),
+        InlineKeyboardButton('❌ Нет', callback_data='cancel')
     )
+    return kb
+
+# Выбор сервера
+def servers_list_kb(servers):
+    kb = InlineKeyboardMarkup()
+    for server in servers:
+        kb.add(InlineKeyboardButton(
+            f"🖥 {server[1]}", 
+            callback_data=f"server_{server[0]}"
+        ))
+    return kb
