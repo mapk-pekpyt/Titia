@@ -2,15 +2,13 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, FSInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
-from keyboards import auth_type_menu, servers_menu
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
+from keyboards import auth_type_menu
 import sqlite3
 import asyncio
 from utils.ssh_client import SSHClient
 from utils.vpn_installer import VPNInstaller
 from config import DB_PATH
-import os
-import tempfile
 
 router = Router()
 
@@ -32,6 +30,38 @@ def back_button():
         keyboard=[[KeyboardButton(text="⬅️ Назад")]],
         resize_keyboard=True
     )
+
+def servers_menu():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Добавить сервер", callback_data="add_server")],
+            [InlineKeyboardButton(text="📋 Список серверов", callback_data="list_servers")],
+            [InlineKeyboardButton(text="⚙️ Управление", callback_data="manage_servers_0")],  # Изменено
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")]
+        ]
+    )
+
+# Обработчик для кнопки "Управление"
+@router.callback_query(F.data == "manage_servers_0")
+async def manage_servers_menu(callback: CallbackQuery):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, server_name FROM servers")
+    servers = cursor.fetchall()
+    conn.close()
+    
+    if not servers:
+        await callback.answer("Серверов пока нет.")
+        return
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[])
+    for server_id, server_name in servers:
+        keyboard.inline_keyboard.append([
+            InlineKeyboardButton(text=server_name, callback_data=f"manage_{server_id}")
+        ])
+    keyboard.inline_keyboard.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="list_servers")])
+    
+    await callback.message.edit_text("Выберите сервер для управления:", reply_markup=keyboard)
 
 @router.callback_query(F.data == "add_server")
 async def add_server_start(callback: CallbackQuery, state: FSMContext):
@@ -147,7 +177,6 @@ async def finish_server_add(message: Message, state: FSMContext, bot):
     data = await state.get_data()
     server_name = data.get('server_name', 'Без имени')
     
-    # Сохраняем сервер в БД как "устанавливается"
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''
@@ -167,7 +196,6 @@ async def finish_server_add(message: Message, state: FSMContext, bot):
     conn.commit()
     conn.close()
     
-    # Запускаем установку в фоне
     asyncio.create_task(
         install_vpn_background(server_id, data, message.chat.id, bot, server_name)
     )
@@ -192,7 +220,6 @@ async def install_vpn_background(server_id, data, chat_id, bot, server_name):
     connected = await ssh.connect()
     if not connected:
         await bot.send_message(chat_id, f"❌ Не удалось подключиться к серверу '{server_name}'")
-        
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute("UPDATE servers SET status='failed' WHERE id=?", (server_id,))
@@ -202,7 +229,6 @@ async def install_vpn_background(server_id, data, chat_id, bot, server_name):
     
     installer = VPNInstaller(ssh, bot, chat_id)
     result = await installer.install_xui()
-    
     ssh.close()
     
     conn = sqlite3.connect(DB_PATH)
@@ -214,7 +240,6 @@ async def install_vpn_background(server_id, data, chat_id, bot, server_name):
             SET panel_url=?, panel_username=?, panel_password=?, status='active'
             WHERE id=?
         ''', (result['panel_url'], result['username'], result['password'], server_id))
-        
         await bot.send_message(
             chat_id,
             f"✅ Сервер '{server_name}' готов!\n\n"
@@ -255,18 +280,24 @@ async def list_servers(callback: CallbackQuery):
             f"Статус: {server[5]}\n\n"
         )
     
-    await callback.message.answer(text)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")]
+    ])
+    await callback.message.answer(text, reply_markup=keyboard)
 
 @router.callback_query(F.data.startswith("manage_"))
 async def manage_server(callback: CallbackQuery):
-    server_id = callback.data.split("_")[1]
+    parts = callback.data.split("_")
+    if len(parts) != 2:
+        return
+    server_id = parts[1]
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✏️ Сменить имя", callback_data=f"edit_name_{server_id}")],
         [InlineKeyboardButton(text="👥 Изменить макс. пользователей", callback_data=f"edit_max_{server_id}")],
         [InlineKeyboardButton(text="📡 Пинг сервера", callback_data=f"ping_{server_id}")],
         [InlineKeyboardButton(text="🔗 Получить ссылку на панель", callback_data=f"panel_{server_id}")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="list_servers")]
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="manage_servers_0")]
     ])
     
     await callback.message.answer("Управление сервером:", reply_markup=keyboard)
@@ -373,3 +404,8 @@ async def get_panel_link(callback: CallbackQuery):
         )
     else:
         await callback.message.answer("❌ Данные панели не найдены.")
+
+@router.callback_query(F.data == "admin_back")
+async def admin_back(callback: CallbackQuery):
+    from keyboards import admin_main_menu
+    await callback.message.answer("👨‍💻 Админ-панель", reply_markup=admin_main_menu())
