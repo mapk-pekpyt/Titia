@@ -1,34 +1,34 @@
 import re
 import asyncio
 from utils.ssh_client import SSHClient
-from config import ADMIN_CHAT_ID
 
 async def get_server_info(ssh_client: SSHClient):
     """Получить характеристики сервера"""
     try:
-        client = await ssh_client.connect()
+        if not await ssh_client.connect():
+            return {'success': False, 'error': 'SSH connection failed'}
         
         # RAM
-        ram_log, _ = await ssh_client.execute_command(client, "free -h | awk '/^Mem:/ {print $2}'")
-        ram = ram_log.strip() or "Не определена"
+        ram_out, _ = await ssh_client.execute("free -h | awk '/^Mem:/ {print $2}'")
+        ram = ram_out.strip() or "Не определена"
         
         # CPU
-        cpu_log, _ = await ssh_client.execute_command(client, "lscpu | grep 'Model name' | cut -d':' -f2 | xargs")
-        cpu = cpu_log.strip() or "Не определен"
+        cpu_out, _ = await ssh_client.execute("lscpu | grep 'Model name' | cut -d':' -f2 | xargs")
+        cpu = cpu_out.strip() or "Не определен"
         
         # Disk
-        disk_log, _ = await ssh_client.execute_command(client, "df -h / | awk 'NR==2 {print $2}'")
-        disk = disk_log.strip() or "Не определено"
+        disk_out, _ = await ssh_client.execute("df -h / | awk 'NR==2 {print $2}'")
+        disk = disk_out.strip() or "Не определено"
         
         # OS
-        os_log, _ = await ssh_client.execute_command(client, "cat /etc/os-release | grep 'PRETTY_NAME' | cut -d'=' -f2 | tr -d '\"'")
-        os_info = os_log.strip() or "Не определена"
+        os_out, _ = await ssh_client.execute("cat /etc/os-release | grep 'PRETTY_NAME' | cut -d'=' -f2 | tr -d '\"'")
+        os_info = os_out.strip() or "Не определена"
         
         # Uptime
-        uptime_log, _ = await ssh_client.execute_command(client, "uptime -p")
-        uptime = uptime_log.strip() or "Не определен"
+        uptime_out, _ = await ssh_client.execute("uptime -p")
+        uptime = uptime_out.strip() or "Не определен"
         
-        client.close()
+        ssh_client.close()
         
         return {
             'ram': ram,
@@ -41,51 +41,73 @@ async def get_server_info(ssh_client: SSHClient):
     except Exception as e:
         return {'success': False, 'error': str(e)}
 
-async def install_xui(ssh_client: SSHClient, bot):
+async def install_xui(ssh_client: SSHClient, bot=None):
     """Установка x-ui на сервер"""
     log_messages = []
     
     try:
-        client = await ssh_client.connect()
+        if not await ssh_client.connect():
+            return False, None, "❌ Не удалось подключиться по SSH"
+        
         log_messages.append("✅ SSH подключение установлено")
         
-        # 1. Обновление
-        log, code = await ssh_client.execute_command(client, "apt update && apt upgrade -y")
+        # 1. Обновление и установка expect
+        await ssh_client.execute("apt update && apt upgrade -y")
         log_messages.append("📦 Обновление пакетов...")
         
-        # 2. Установка утилит
-        log, code = await ssh_client.execute_command(client, "apt install curl wget git ufw expect -y")
+        await ssh_client.execute("apt install curl wget git ufw expect -y")
         log_messages.append("📦 Установка утилит...")
         
-        # 3. Установка x-ui с автоматическим ответом
-        install_script = """
-        expect -c '
-        spawn bash <(curl -Ls https://raw.githubusercontent.com/alireza0/x-ui/master/install.sh)
-        expect "Please enter the panel port:" { send "54321\\r" }
-        expect "Please enter the panel username:" { send "admin\\r" }
-        expect "Please enter the panel password:" { send "admin12345\\r" }
-        expect eof
-        '
-        """
-        log, code = await ssh_client.execute_command(client, install_script)
+        # 2. Установка x-ui с expect
+        install_script = '''/usr/bin/expect -c '
+set timeout 300
+spawn bash <(curl -Ls https://raw.githubusercontent.com/alireza0/x-ui/master/install.sh)
+expect "panel port:" { send "54321\\r" }
+expect "panel username:" { send "admin\\r" }
+expect "panel password:" { send "admin12345\\r" }
+expect eof
+' '''
+        
+        output, error = await ssh_client.execute(install_script)
         log_messages.append("🚀 Установка x-ui...")
         
-        # 4. Открытие портов
-        ports_cmd = "ufw allow 54321/tcp && ufw allow 443/tcp && ufw allow 2096/tcp && ufw --force enable"
-        log, code = await ssh_client.execute_command(client, ports_cmd)
+        # 3. Открытие портов
+        await ssh_client.execute("ufw allow 54321/tcp")
+        await ssh_client.execute("ufw allow 443/tcp")
+        await ssh_client.execute("ufw allow 2096/tcp")
+        await ssh_client.execute("ufw --force enable")
         log_messages.append("🔓 Открытие портов...")
         
-        # 5. Получение пути панели
-        log, code = await ssh_client.execute_command(client, "cat /etc/x-ui/x-ui.db 2>/dev/null | grep -o '\"path\":\"[^\"]*' | cut -d'\"' -f4 || echo 'admin'")
-        panel_path = log.strip().split('\n')[-1] if log.strip() else "admin"
+        # 4. Ждём запуска и проверяем
+        await ssh_client.execute("sleep 10")
+        status_out, _ = await ssh_client.execute("systemctl is-active x-ui")
         
-        # 6. Формирование ссылки
-        panel_url = f"http://{ssh_client.host}:54321/{panel_path}"
-        log_messages.append(f"🔗 Панель: {panel_url}")
+        if "active" not in status_out:
+            # Пробуем запустить вручную
+            await ssh_client.execute("systemctl start x-ui")
+            await ssh_client.execute("sleep 3")
+            status_out, _ = await ssh_client.execute("systemctl is-active x-ui")
         
-        client.close()
-        return True, panel_url, "\n".join(log_messages[:10])  # Первые 10 строк логов
-        
+        if "active" in status_out:
+            # Получаем путь панели из БД
+            path_out, _ = await ssh_client.execute("sqlite3 /etc/x-ui/x-ui.db 'SELECT path FROM settings LIMIT 1' 2>/dev/null || echo 'admin'")
+            panel_path = path_out.strip() if path_out.strip() else "admin"
+            
+            panel_url = f"http://{ssh_client.host}:54321/{panel_path}"
+            log_messages.append(f"✅ X-UI запущен")
+            log_messages.append(f"🔗 Панель: {panel_url}")
+            log_messages.append(f"👤 Логин: admin")
+            log_messages.append(f"🔑 Пароль: admin12345")
+            
+            ssh_client.close()
+            return True, panel_url, "\n".join(log_messages)
+        else:
+            log_messages.append("❌ X-UI не запустился после установки")
+            ssh_client.close()
+            return False, None, "\n".join(log_messages)
+            
     except Exception as e:
-        log_messages.append(f"❌ Ошибка: {str(e)}")
+        log_messages.append(f"❌ Критическая ошибка: {str(e)}")
+        if hasattr(ssh_client, 'close'):
+            ssh_client.close()
         return False, None, "\n".join(log_messages)
