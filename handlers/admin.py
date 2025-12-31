@@ -305,37 +305,40 @@ async def manage_servers(message: types.Message):
         await message.answer("❌ Нет активных серверов", reply_markup=admin_servers_kb)
         return
     
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     kb = InlineKeyboardMarkup(row_width=1)
+    
     for server in servers:
-        kb.add(InlineKeyboardButton(f"🖥 {server[1]}", callback_data=f"server_{server[0]}"))
-    kb.add(InlineKeyboardButton("🔙 Назад", callback_data="back_to_servers"))
+        kb.add(InlineKeyboardButton(f"🖥 {server[1]}", callback_data=f"manage_{server[0]}"))
+    
+    kb.add(InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu"))
     
     await message.answer("Выберите сервер для управления:", reply_markup=kb)
 
-# Inline обработчик выбора сервера
-async def process_server_callback(callback: types.CallbackQuery):
+# Добавляем обработчик callback
+async def process_manage_callback(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
         return
     
     data = callback.data
     
-    if data == "back_to_servers":
+    if data == "back_to_menu":
         from keyboards import admin_servers_kb
-        await callback.message.edit_text("🖥 Управление серверами")
-        await callback.message.edit_reply_markup(admin_servers_kb)
+        await callback.message.delete()
+        await callback.message.answer("🖥 Управление серверами", reply_markup=admin_servers_kb)
         return
     
-    if data.startswith("server_"):
+    if data.startswith("manage_"):
         server_id = data.split("_")[1]
         
         conn = sqlite3.connect('vpn_bot.db')
         cursor = conn.cursor()
-        cursor.execute("SELECT host, panel_path FROM servers WHERE id=?", (server_id,))
+        cursor.execute("SELECT host, panel_path, ram_info, cpu_info FROM servers WHERE id=?", (server_id,))
         server = cursor.fetchone()
         conn.close()
         
         if server:
-            host, panel_path = server
+            host, panel_path, ram, cpu = server
             panel_url = f"http://{host}:54321/{panel_path}"
             
             kb = InlineKeyboardMarkup(row_width=2)
@@ -350,15 +353,12 @@ async def process_server_callback(callback: types.CallbackQuery):
             await callback.message.edit_text(
                 f"⚙️ Управление сервером:\n\n"
                 f"🌐 IP: {host}\n"
-                f"🔗 Панель: {panel_url}\n\n"
+                f"🔗 Панель: {panel_url}\n"
+                f"💾 RAM: {ram or '—'}\n"
+                f"⚡ CPU: {cpu or '—'}\n\n"
                 f"Выберите действие:",
                 reply_markup=kb
             )
-    
-    elif data.startswith("reinstall_"):
-        server_id = data.split("_")[1]
-        await callback.answer("Функция переустановки в разработке", show_alert=True)
-
 # 5. Кнопка "👥 Пользователи"
 async def admin_users(message: types.Message):
     if message.from_user.id != ADMIN_ID:
