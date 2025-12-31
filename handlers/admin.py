@@ -1,22 +1,6 @@
 from aiogram import types, Dispatcher
-from aiogram.dispatcher import FSMContext
-from aiogram.dispatcher.filters.state import State, StatesGroup
 from config import ADMIN_ID
 import sqlite3
-
-class AddServer(StatesGroup):
-    host = State()
-    ssh_port = State()
-    ssh_username = State()
-    ssh_method = State()
-    ssh_password = State()
-    ssh_key = State()
-
-async def admin_start(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    from keyboards import admin_main_kb
-    await message.answer("👑 Админ-панель", reply_markup=admin_main_kb)
 
 async def admin_servers(message: types.Message):
     if message.from_user.id != ADMIN_ID:
@@ -49,13 +33,7 @@ async def admin_stats(message: types.Message):
     cursor.execute("SELECT SUM(amount) FROM payments WHERE status='success'")
     income = cursor.fetchone()[0] or 0
     
-    stats = (
-        f"📊 Статистика:\n"
-        f"🖥 Активных серверов: {servers}\n"
-        f"👥 Пользователей: {users}\n"
-        f"📅 Активных подписок: {active_subs}\n"
-        f"💰 Общий доход: {income}₽"
-    )
+    stats = f"📊 Статистика:\n🖥 Активных серверов: {servers}\n👥 Пользователей: {users}\n📅 Активных подписок: {active_subs}\n💰 Общий доход: {income}₽"
     
     conn.close()
     await message.answer(stats)
