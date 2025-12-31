@@ -139,23 +139,19 @@ async def process_ssh_key_file(message: types.Message, state: FSMContext):
         await message.answer("Выберите метод аутентификации:", reply_markup=method_kb)
         return
     
-    # Проверяем, что это документ
     if not message.document:
-        await message.answer("❌ Отправьте ФАЙЛ SSH ключа (.pem, .key), не текст", reply_markup=back_kb())
+        await message.answer("❌ Отправьте файл ключа", reply_markup=back_kb())
         return
     
-    # Скачиваем файл
-    try:
-        file = await message.bot.get_file(message.document.file_id)
-        file_bytes = await message.bot.download_file(file.file_path)
-        key_content = file_bytes.read().decode('utf-8')
-        
-        async with state.proxy() as data:
-            data['ssh_key'] = key_content
-        
-        await connect_and_install(message, state)
-    except Exception as e:
-        await message.answer(f"❌ Ошибка чтения файла: {str(e)}", reply_markup=back_kb())
+    # Просто читаем как текст
+    file = await message.document.get_file()
+    file_bytes = await message.bot.download_file(file.file_path)
+    key_content = file_bytes.decode('utf-8')
+    
+    async with state.proxy() as data:
+        data['ssh_key'] = key_content
+    
+    await connect_and_install(message, state)
 # Подключение и установка
 async def connect_and_install(message: types.Message, state: FSMContext):
     from keyboards import admin_main_kb
