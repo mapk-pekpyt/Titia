@@ -67,6 +67,10 @@ def init_db():
     conn.commit()
     conn.close()
 
+def get_db():
+    """Получить соединение с БД"""
+    return sqlite3.connect(DB_PATH)
+
 if __name__ == '__main__':
     init_db()
     print("База данных инициализирована")
