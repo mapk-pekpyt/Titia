@@ -359,25 +359,204 @@ async def process_manage_callback(callback: types.CallbackQuery):
                 f"Выберите действие:",
                 reply_markup=kb
             )
-# 5. Кнопка "👥 Пользователи"
-async def admin_users(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    from keyboards import admin_users_kb
-    await message.answer("👥 Управление пользователями", reply_markup=admin_users_kb)
+from aiogram.dispatcher.filters.state import State, StatesGroup
 
-# 6. Кнопка "🎁 Выдать VPN"
+class GiveVPNStates(StatesGroup):
+    waiting_user_id = State()
+    waiting_tariff = State()
+
+class DisableVPNStates(StatesGroup):
+    waiting_user_id = State()
+
+# Кнопка "🎁 Выдать VPN"
 async def give_vpn(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
-    await message.answer("Введите ID пользователя для выдачи VPN:", reply_markup=back_kb())
+    
+    await GiveVPNStates.waiting_user_id.set()
+    await message.answer("Введите ID пользователя (число) или @username:", reply_markup=back_kb())
 
-# 7. Кнопка "🚫 Отключить VPN"
+# Обработка ID пользователя
+async def process_give_vpn_user_id(message: types.Message, state: FSMContext):
+    if message.text == '🔙 Назад':
+        await state.finish()
+        from keyboards import admin_users_kb
+        await message.answer("👥 Управление пользователями", reply_markup=admin_users_kb)
+        return
+    
+    user_id = None
+    
+    # Пытаемся получить ID из текста
+    try:
+        # Если это число
+        user_id = int(message.text)
+    except ValueError:
+        # Если это @username
+        if message.text.startswith('@'):
+            conn = sqlite3.connect('vpn_bot.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM users WHERE username=?", (message.text[1:],))
+            user = cursor.fetchone()
+            conn.close()
+            
+            if user:
+                user_id = user[0]
+            else:
+                await message.answer("❌ Пользователь не найден. Введите ID или @username:", reply_markup=back_kb())
+                return
+        else:
+            await message.answer("❌ Введите корректный ID (число) или @username:", reply_markup=back_kb())
+            return
+    
+    async with state.proxy() as data:
+        data['user_id'] = user_id
+    
+    await GiveVPNStates.next()
+    
+    from keyboards import tariffs_kb
+    await message.answer(f"Выберите тариф для пользователя {user_id}:", reply_markup=tariffs_kb)
+
+# Обработка выбора тарифа
+async def process_give_vpn_tariff(message: types.Message, state: FSMContext):
+    if message.text == '🔙 Назад':
+        await GiveVPNStates.waiting_user_id.set()
+        await message.answer("Введите ID пользователя:", reply_markup=back_kb())
+        return
+    
+    tariff_map = {
+        '🎁 Пробник (1 день)': ('trial', 1),
+        '📅 Неделя - 100₽': ('week', 7),
+        '📅 Месяц - 250₽': ('month', 30),
+        '📅 2 месяца - 450₽': ('2months', 60)
+    }
+    
+    if message.text not in tariff_map:
+        await message.answer("❌ Выберите тариф из списка:", reply_markup=tariffs_kb)
+        return
+    
+    async with state.proxy() as data:
+        user_id = data['user_id']
+        tariff_name, days = tariff_map[message.text]
+    
+    # Выдаем подписку
+    conn = sqlite3.connect('vpn_bot.db')
+    cursor = conn.cursor()
+    
+    import datetime
+    start_date = datetime.datetime.now()
+    end_date = start_date + datetime.timedelta(days=days)
+    
+    # Находим свободный сервер
+    cursor.execute('''
+        SELECT id FROM servers 
+        WHERE status='active' AND current_users < max_users 
+        LIMIT 1
+    ''')
+    server = cursor.fetchone()
+    server_id = server[0] if server else None
+    
+    # Добавляем подписку
+    cursor.execute('''
+        INSERT INTO subscriptions (user_id, server_id, tariff, status, start_date, end_date)
+        VALUES (?, ?, ?, 'active', ?, ?)
+    ''', (user_id, server_id, tariff_name, start_date, end_date))
+    
+    # Увеличиваем счетчик пользователей на сервере
+    if server_id:
+        cursor.execute("UPDATE servers SET current_users = current_users + 1 WHERE id=?", (server_id,))
+    
+    conn.commit()
+    
+    # Получаем данные сервера для отправки пользователю
+    panel_url = None
+    if server_id:
+        cursor.execute("SELECT host, panel_path FROM servers WHERE id=?", (server_id,))
+        server_data = cursor.fetchone()
+        if server_data:
+            panel_url = f"http://{server_data[0]}:54321/{server_data[1]}"
+    
+    conn.close()
+    
+    # Отправляем уведомление пользователю
+    try:
+        bot = message.bot
+        if panel_url:
+            await bot.send_message(
+                user_id,
+                f"🎁 Вам выдан VPN доступ!\n\n"
+                f"📅 Тариф: {message.text}\n"
+                f"🔗 Панель: {panel_url}\n"
+                f"👤 Логин: admin\n"
+                f"🔑 Пароль: admin12345\n\n"
+                f"Настройте Reality подключение на порту 443"
+            )
+        else:
+            await bot.send_message(user_id, f"🎁 Вам выдан VPN доступ! Тариф: {message.text}")
+    except:
+        pass  # Если не удалось отправить
+    
+    await state.finish()
+    from keyboards import admin_users_kb
+    await message.answer(f"✅ VPN успешно выдан пользователю {user_id}", reply_markup=admin_users_kb)
+
+# Кнопка "🚫 Отключить VPN"
 async def disable_vpn(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
-    await message.answer("Введите ID пользователя для отключения VPN:", reply_markup=back_kb())
+    
+    await DisableVPNStates.waiting_user_id.set()
+    await message.answer("Введите ID пользователя для отключения:", reply_markup=back_kb())
 
+# Обработка отключения VPN
+async def process_disable_vpn(message: types.Message, state: FSMContext):
+    if message.text == '🔙 Назад':
+        await state.finish()
+        from keyboards import admin_users_kb
+        await message.answer("👥 Управление пользователями", reply_markup=admin_users_kb)
+        return
+    
+    try:
+        user_id = int(message.text)
+    except:
+        await message.answer("❌ Введите числовой ID пользователя:", reply_markup=back_kb())
+        return
+    
+    # Отключаем подписку
+    conn = sqlite3.connect('vpn_bot.db')
+    cursor = conn.cursor()
+    
+    # Получаем сервер пользователя
+    cursor.execute("SELECT server_id FROM subscriptions WHERE user_id=? AND status='active'", (user_id,))
+    subscription = cursor.fetchone()
+    
+    if subscription:
+        server_id = subscription[0]
+        # Отключаем подписку
+        cursor.execute("UPDATE subscriptions SET status='disabled' WHERE user_id=? AND status='active'", (user_id,))
+        
+        # Уменьшаем счетчик пользователей на сервере
+        if server_id:
+            cursor.execute("UPDATE servers SET current_users = current_users - 1 WHERE id=?", (server_id,))
+        
+        conn.commit()
+        
+        # Отправляем уведомление пользователю
+        try:
+            bot = message.bot
+            await bot.send_message(
+                user_id,
+                "🚫 Ваш VPN доступ отключен администратором.\n\n"
+                "Для выяснения причин обратитесь в поддержку."
+            )
+        except:
+            pass
+        
+        await message.answer(f"✅ VPN отключен для пользователя {user_id}", reply_markup=admin_users_kb)
+    else:
+        await message.answer(f"❌ У пользователя {user_id} нет активной подписки", reply_markup=admin_users_kb)
+    
+    conn.close()
+    await state.finish()
 # 8. Кнопка "💰 Метод оплаты"
 async def payment_method(message: types.Message):
     if message.from_user.id != ADMIN_ID:
@@ -449,20 +628,31 @@ def register_admin_handlers(dp: Dispatcher):
     dp.register_message_handler(admin_servers, text='🖥 Сервера', user_id=ADMIN_ID)
     dp.register_message_handler(add_server_start, text='➕ Добавить сервер', user_id=ADMIN_ID)
     dp.register_message_handler(list_servers, text='📋 Список серверов', user_id=ADMIN_ID)
+    dp.register_message_handler(manage_servers, text='⚙️ Управление серверами', user_id=ADMIN_ID)  # ✅ РАБОТАЕТ
     dp.register_message_handler(admin_users, text='👥 Пользователи', user_id=ADMIN_ID)
-    dp.register_message_handler(give_vpn, text='🎁 Выдать VPN', user_id=ADMIN_ID)
-    dp.register_message_handler(disable_vpn, text='🚫 Отключить VPN', user_id=ADMIN_ID)
+    dp.register_message_handler(give_vpn, text='🎁 Выдать VPN', user_id=ADMIN_ID)  # ✅ РАБОТАЕТ
+    dp.register_message_handler(disable_vpn, text='🚫 Отключить VPN', user_id=ADMIN_ID)  # ✅ РАБОТАЕТ
     dp.register_message_handler(payment_method, text='💰 Метод оплаты', user_id=ADMIN_ID)
     dp.register_message_handler(admin_stats, text='📊 Статистика', user_id=ADMIN_ID)
     dp.register_message_handler(admin_back, text='🔙 Назад', user_id=ADMIN_ID)
     
-    # Обработчики состояний
+    # Обработчики состояний добавления сервера
     dp.register_message_handler(process_host, state=AddServer.host)
     dp.register_message_handler(process_ssh_port, state=AddServer.ssh_port)
     dp.register_message_handler(process_ssh_username, state=AddServer.ssh_username)
     dp.register_message_handler(process_ssh_method, state=AddServer.ssh_method)
     dp.register_message_handler(process_ssh_password, state=AddServer.ssh_password)
-    dp.register_message_handler(process_ssh_key_file, content_types=['document', 'text'], state=AddServer.ssh_key_file)
+    dp.register_message_handler(process_ssh_key_file, content_types=types.ContentType.DOCUMENT, state=AddServer.ssh_key_file)
+    
+    # Обработчики выдачи VPN
+    dp.register_message_handler(process_give_vpn_user_id, state=GiveVPNStates.waiting_user_id)
+    dp.register_message_handler(process_give_vpn_tariff, state=GiveVPNStates.waiting_tariff)
+    
+    # Обработчики отключения VPN
+    dp.register_message_handler(process_disable_vpn, state=DisableVPNStates.waiting_user_id)
     
     # Inline обработчики
-    dp.register_callback_query_handler(process_server_callback, lambda c: c.data.startswith(('server_', 'back_', 'reinstall_', 'ping_', 'limit_', 'disable_')), user_id=ADMIN_ID)
+    dp.register_callback_query_handler(process_manage_callback, lambda c: c.data.startswith(('manage_', 'back_')), user_id=ADMIN_ID)
+    
+    # Обработчик кнопки "Назад" для состояний
+    dp.register_message_handler(lambda m: m.text == '🔙 Назад' and m.from_user.id == ADMIN_ID, state="*")
