@@ -64,6 +64,17 @@ def init_db():
         )
     ''')
     
+    #  servers:
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS servers (
+            ...
+            ram_info TEXT,
+            cpu_info TEXT,
+            disk_info TEXT,
+            ...
+        )
+    ''')
+    
     conn.commit()
     conn.close()
 
