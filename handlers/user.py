@@ -1,14 +1,14 @@
 from aiogram import types, Dispatcher
-from aiogram.dispatcher import FSMContext
-from config import SUPPORT_USERNAME, TRIBUTE_PRODUCTS
+from config import SUPPORT_USERNAME, TRIBUTE_PRODUCTS, ADMIN_ID
 import sqlite3
 import datetime
 
 async def user_start(message: types.Message):
-    # Импортируем здесь, чтобы избежать циклического импорта
+    if message.from_user.id == ADMIN_ID:
+        return
+    
     from keyboards import user_main_kb
     
-    # Регистрация пользователя
     conn = sqlite3.connect('vpn_bot.db')
     cursor = conn.cursor()
     cursor.execute('''
@@ -21,22 +21,24 @@ async def user_start(message: types.Message):
     await message.answer(f"Привет! Выберите действие:", reply_markup=user_main_kb)
 
 async def get_vpn(message: types.Message):
+    if message.from_user.id == ADMIN_ID:
+        return
     from keyboards import tariffs_kb
     await message.answer("Выберите тариф:", reply_markup=tariffs_kb)
 
 async def process_trial(message: types.Message):
+    if message.from_user.id == ADMIN_ID:
+        return
     from keyboards import user_main_kb
     
     user_id = message.from_user.id
     conn = sqlite3.connect('vpn_bot.db')
     cursor = conn.cursor()
     
-    # Проверяем, использовал ли пробник
     cursor.execute("SELECT trial_used FROM users WHERE id=?", (user_id,))
     user = cursor.fetchone()
     
     if not user or user[0] == 0:
-        # Выдаем пробник
         end_date = datetime.datetime.now() + datetime.timedelta(days=1)
         cursor.execute('''
             INSERT INTO subscriptions (user_id, tariff, status, start_date, end_date)
@@ -46,7 +48,6 @@ async def process_trial(message: types.Message):
         cursor.execute("UPDATE users SET trial_used=1 WHERE id=?", (user_id,))
         conn.commit()
         
-        # Получаем свободный сервер
         cursor.execute('''
             SELECT s.host, s.panel_port, s.panel_path 
             FROM servers s 
@@ -70,13 +71,15 @@ async def process_trial(message: types.Message):
                 reply_markup=user_main_kb
             )
         else:
-            await message.answer("😔 Нет доступных серверов. Обратитесь к администратору.")
+            await message.answer("😔 Нет доступных серверов.", reply_markup=user_main_kb)
     else:
-        await message.answer("❌ Вы уже использовали пробный период.")
+        await message.answer("❌ Вы уже использовали пробный период.", reply_markup=user_main_kb)
     
     conn.close()
 
 async def process_payment(message: types.Message):
+    if message.from_user.id == ADMIN_ID:
+        return
     from keyboards import user_main_kb
     
     tariff_text = message.text
@@ -90,7 +93,6 @@ async def process_payment(message: types.Message):
         tariff = tariffs[tariff_text]
         product = TRIBUTE_PRODUCTS[tariff]
         
-        # Ссылка на оплату в Tribute
         payment_url = f"https://t.me/tribute/app?startapp={product['id']}"
         
         await message.answer(
@@ -104,6 +106,8 @@ async def process_payment(message: types.Message):
         )
 
 async def my_subscription(message: types.Message):
+    if message.from_user.id == ADMIN_ID:
+        return
     from keyboards import user_main_kb
     
     user_id = message.from_user.id
@@ -135,6 +139,8 @@ async def my_subscription(message: types.Message):
         await message.answer("❌ У вас нет активной подписки.", reply_markup=user_main_kb)
 
 async def help_command(message: types.Message):
+    if message.from_user.id == ADMIN_ID:
+        return
     from keyboards import user_main_kb
     
     await message.answer(
@@ -147,15 +153,16 @@ async def help_command(message: types.Message):
         reply_markup=user_main_kb
     )
 
-async def back_handler(message: types.Message):
+async def user_back(message: types.Message):
+    if message.from_user.id == ADMIN_ID:
+        return
     from keyboards import user_main_kb
     await message.answer("Главное меню:", reply_markup=user_main_kb)
 
 def register_user_handlers(dp: Dispatcher):
-    dp.register_message_handler(user_start, commands=['start', 'help'])
     dp.register_message_handler(get_vpn, text='🔑 Получить VPN')
     dp.register_message_handler(process_trial, text='🎁 Пробник (1 день)')
     dp.register_message_handler(process_payment, text=['📅 Неделя - 100₽', '📅 Месяц - 250₽', '📅 2 месяца - 450₽'])
     dp.register_message_handler(my_subscription, text='📄 Моя подписка')
     dp.register_message_handler(help_command, text='🆘 Помощь')
-    dp.register_message_handler(back_handler, text='🔙 Назад')
+    dp.register_message_handler(user_back, text='🔙 Назад')
