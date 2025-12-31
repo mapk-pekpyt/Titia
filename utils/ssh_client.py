@@ -1,3 +1,4 @@
+# utils/ssh_client.py
 import paramiko
 import asyncio
 from io import StringIO
@@ -14,104 +15,73 @@ class SSHClient:
         self._client = None
         
     async def connect(self):
-        """Асинхронное подключение по SSH"""
-        loop = asyncio.get_event_loop()
-        
-        def sync_connect():
-            client = paramiko.SSHClient()
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            
-            try:
-                if self.key:
-                    # Используем ключ
-                    key_file = StringIO(self.key)
-                    
-                    # Пробуем разные форматы ключей
-                    try:
-                        pkey = paramiko.RSAKey.from_private_key(key_file)
-                    except paramiko.ssh_exception.SSHException:
-                        key_file.seek(0)
-                        try:
-                            pkey = paramiko.Ed25519Key.from_private_key(key_file)
-                        except:
-                            key_file.seek(0)
-                            try:
-                                pkey = paramiko.ECDSAKey.from_private_key(key_file)
-                            except:
-                                # Пробуем как DSA ключ
-                                key_file.seek(0)
-                                pkey = paramiko.DSSKey.from_private_key(key_file)
-                    
-                    client.connect(
-                        hostname=self.host,
-                        port=self.port,
-                        username=self.username,
-                        pkey=pkey,
-                        timeout=10,
-                        banner_timeout=20
-                    )
-                else:
-                    # Подключаемся с паролем
-                    client.connect(
-                        hostname=self.host,
-                        port=self.port,
-                        username=self.username,
-                        password=self.password,
-                        timeout=10,
-                        banner_timeout=20
-                    )
-                
-                return client
-                
-            except Exception as e:
-                self.logger.error(f"SSH ошибка: {str(e)}")
-                raise e
-        
+        """Подключение по SSH"""
         try:
-            self._client = await loop.run_in_executor(None, sync_connect)
-            self.logger.info(f"✅ SSH подключение к {self.host}:{self.port}")
-            return self._client
-        except Exception as e:
-            raise Exception(f"SSH подключение не удалось: {str(e)}")
-    
-    async def execute_command(self, client, command, timeout=30):
-        """Выполнение команды (для старого установщика)"""
-        def sync_execute():
-            try:
-                stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
-                exit_status = stdout.channel.recv_exit_status()
-                output = stdout.read().decode('utf-8', errors='ignore').strip()
-                error = stderr.read().decode('utf-8', errors='ignore').strip()
+            self._client = paramiko.SSHClient()
+            self._client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            
+            if self.key:
+                # Используем ключ
+                key_file = StringIO(self.key)
                 
-                # Форматируем результат как в старом коде
-                result = f"Команда: {command}\n"
-                result += f"Код выхода: {exit_status}\n"
-                if output:
-                    result += f"Вывод:\n{output[:1000]}\n"
-                if error:
-                    result += f"Ошибки:\n{error[:1000]}\n"
-                    
-                return result, exit_status
-            except Exception as e:
-                raise Exception(f"Ошибка выполнения команды: {str(e)}")
-        
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, sync_execute)
+                # Пробуем разные форматы ключей
+                try:
+                    pkey = paramiko.RSAKey.from_private_key(key_file)
+                except:
+                    key_file.seek(0)
+                    try:
+                        pkey = paramiko.Ed25519Key.from_private_key(key_file)
+                    except:
+                        key_file.seek(0)
+                        pkey = paramiko.ECDSAKey.from_private_key(key_file)
+                
+                self._client.connect(
+                    hostname=self.host,
+                    port=self.port,
+                    username=self.username,
+                    pkey=pkey,
+                    timeout=30,
+                    banner_timeout=30
+                )
+            else:
+                # Подключаемся с паролем
+                self._client.connect(
+                    hostname=self.host,
+                    port=self.port,
+                    username=self.username,
+                    password=self.password,
+                    timeout=30,
+                    banner_timeout=30
+                )
+            
+            self.logger.info(f"✅ SSH подключение к {self.host}:{self.port}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ SSH ошибка: {str(e)}")
+            return False
     
-    async def execute(self, command, timeout=30):
-        """Упрощенный метод execute (для нового установщика)"""
-        if not self._client:
-            self._client = await self.connect()
-        
-        def sync_execute():
+    async def execute(self, command, timeout=60):
+        """Выполнение команды - возвращает (output, error)"""
+        try:
+            if not self._client:
+                await self.connect()
+            
+            # Выполняем команду
             stdin, stdout, stderr = self._client.exec_command(command, timeout=timeout)
+            
+            # Ждем завершения
             exit_status = stdout.channel.recv_exit_status()
+            
+            # Читаем вывод
             output = stdout.read().decode('utf-8', errors='ignore').strip()
             error = stderr.read().decode('utf-8', errors='ignore').strip()
-            return output, exit_status
-        
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, sync_execute)
+            
+            return output, error
+            
+        except Exception as e:
+            self.logger.error(f"Ошибка выполнения команды: {str(e)}")
+            return None, str(e)
     
     def close(self):
         """Закрыть соединение"""
