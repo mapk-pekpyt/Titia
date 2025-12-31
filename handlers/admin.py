@@ -145,20 +145,27 @@ async def process_ssh_key_file(message: types.Message, state: FSMContext):
     
     # Скачиваем файл
     file = await message.document.get_file()
-    file_path = f"/tmp/ssh_key_{message.from_user.id}.pem"
-    await file.download(file_path)
+    
+    # Создаем временный файл
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.pem') as tmp:
+        file_content = await file.download_as_bytearray()
+        decoded_content = file_content.decode('utf-8', errors='ignore')
+        tmp.write(decoded_content)
+        tmp_path = tmp.name
     
     # Читаем содержимое
-    with open(file_path, 'r') as f:
+    with open(tmp_path, 'r') as f:
         key_content = f.read()
     
-    os.remove(file_path)
+    # Удаляем временный файл
+    import os
+    os.unlink(tmp_path)
     
     async with state.proxy() as data:
         data['ssh_key'] = key_content
     
     await connect_and_install(message, state)
-
 # Подключение и установка
 async def connect_and_install(message: types.Message, state: FSMContext):
     from keyboards import admin_main_kb
