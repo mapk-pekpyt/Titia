@@ -33,8 +33,7 @@ async def admin_stats(message: types.Message):
     cursor.execute("SELECT SUM(amount) FROM payments WHERE status='success'")
     income = cursor.fetchone()[0] or 0
     
-    stats = f"📊 Статистика:\n🖥 Активных серверов: {servers}\n👥 Пользователей: {users}\n📅 Активных подписок: {active_subs}\n💰 Общий доход: {income}₽"
-    
+    stats = f"📊 Статистика:\n🖥 Серверов: {servers}\n👥 Пользователей: {users}\n📅 Подписок: {active_subs}\n💰 Доход: {income}₽"
     conn.close()
     await message.answer(stats)
 
