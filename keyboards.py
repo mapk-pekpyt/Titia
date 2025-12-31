@@ -1,6 +1,5 @@
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
-# Главное меню админа
 admin_main_kb = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
 admin_main_kb.add(
     KeyboardButton('🖥 Сервера'),
@@ -9,7 +8,6 @@ admin_main_kb.add(
     KeyboardButton('💰 Метод оплаты')
 )
 
-# Меню серверов
 admin_servers_kb = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
 admin_servers_kb.add(
     KeyboardButton('➕ Добавить сервер'),
@@ -18,7 +16,6 @@ admin_servers_kb.add(
     KeyboardButton('🔙 Назад')
 )
 
-# Меню пользователей
 admin_users_kb = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
 admin_users_kb.add(
     KeyboardButton('🎁 Выдать VPN'),
@@ -26,7 +23,6 @@ admin_users_kb.add(
     KeyboardButton('🔙 Назад')
 )
 
-# Главное меню пользователя
 user_main_kb = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
 user_main_kb.add(
     KeyboardButton('🔑 Получить VPN'),
@@ -34,7 +30,6 @@ user_main_kb.add(
     KeyboardButton('🆘 Помощь')
 )
 
-# Тарифы
 tariffs_kb = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
 tariffs_kb.add(
     KeyboardButton('🎁 Пробник (1 день)'),
@@ -44,5 +39,5 @@ tariffs_kb.add(
     KeyboardButton('🔙 Назад')
 )
 
-# Кнопка "Назад" отдельно
-back_kb = ReplyKeyboardMarkup(resize_keyboard=True).add(KeyboardButton('🔙 Назад'))
+def back_kb():
+    return ReplyKeyboardMarkup(resize_keyboard=True).add(KeyboardButton('🔙 Назад'))
