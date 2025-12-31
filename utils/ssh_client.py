@@ -1,4 +1,3 @@
-# utils/ssh_client.py
 import paramiko
 import asyncio
 from io import StringIO
@@ -12,46 +11,33 @@ class SSHClient:
         self.password = password
         self.key = key
         self.logger = logging.getLogger(__name__)
-        self._client = None
+        self.client = None
         
     async def connect(self):
         """Подключение по SSH"""
         try:
-            self._client = paramiko.SSHClient()
-            self._client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            self.client = paramiko.SSHClient()
+            self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             
             if self.key:
                 # Используем ключ
                 key_file = StringIO(self.key)
-                
-                # Пробуем разные форматы ключей
-                try:
-                    pkey = paramiko.RSAKey.from_private_key(key_file)
-                except:
-                    key_file.seek(0)
-                    try:
-                        pkey = paramiko.Ed25519Key.from_private_key(key_file)
-                    except:
-                        key_file.seek(0)
-                        pkey = paramiko.ECDSAKey.from_private_key(key_file)
-                
-                self._client.connect(
+                pkey = paramiko.RSAKey.from_private_key(key_file)
+                self.client.connect(
                     hostname=self.host,
                     port=self.port,
                     username=self.username,
                     pkey=pkey,
-                    timeout=30,
-                    banner_timeout=30
+                    timeout=30
                 )
             else:
                 # Подключаемся с паролем
-                self._client.connect(
+                self.client.connect(
                     hostname=self.host,
                     port=self.port,
                     username=self.username,
                     password=self.password,
-                    timeout=30,
-                    banner_timeout=30
+                    timeout=30
                 )
             
             self.logger.info(f"✅ SSH подключение к {self.host}:{self.port}")
@@ -62,13 +48,13 @@ class SSHClient:
             return False
     
     async def execute(self, command, timeout=60):
-        """Выполнение команды - возвращает (output, error)"""
+        """Выполнение команды"""
         try:
-            if not self._client:
+            if not self.client:
                 await self.connect()
             
             # Выполняем команду
-            stdin, stdout, stderr = self._client.exec_command(command, timeout=timeout)
+            stdin, stdout, stderr = self.client.exec_command(command, timeout=timeout)
             
             # Ждем завершения
             exit_status = stdout.channel.recv_exit_status()
@@ -85,6 +71,6 @@ class SSHClient:
     
     def close(self):
         """Закрыть соединение"""
-        if self._client:
-            self._client.close()
-            self._client = None
+        if self.client:
+            self.client.close()
+            self.client = None
