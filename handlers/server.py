@@ -123,14 +123,14 @@ async def process_username(message: Message, state: FSMContext):
         await state.set_state(ServerAdd.ssh_key)
 
 @router.message(ServerAdd.password)
-async def process_password(message: Message, state: FSMContext):
+async def process_password(message: Message, state: FSMContext, bot):
     if message.text == "⬅️ Назад":
         await message.answer("Введите имя пользователя SSH:", reply_markup=back_button())
         await state.set_state(ServerAdd.username)
         return
     
     await state.update_data(password=message.text)
-    await finish_server_add(message, state)
+    await finish_server_add(message, state, bot)
 
 @router.message(F.document, ServerAdd.ssh_key)
 async def process_ssh_key_file(message: Message, state: FSMContext, bot):
@@ -138,17 +138,49 @@ async def process_ssh_key_file(message: Message, state: FSMContext, bot):
         file = await bot.download(message.document)
         key_content = file.read().decode('utf-8')
         await state.update_data(ssh_key=key_content)
-        await finish_server_add(message, state)
+        await finish_server_add(message, state, bot)
     else:
         await message.answer("Пожалуйста, отправьте файл с ключом.")
 
-async def finish_server_add(message: Message, state: FSMContext):
+async def finish_server_add(message: Message, state: FSMContext, bot):
+    """Сохраняем сервер и запускаем фоновую установку"""
     data = await state.get_data()
     server_name = data.get('server_name', 'Без имени')
     
-    await message.answer("⏳ Подключаюсь к серверу...")
+    # Сохраняем сервер в БД как "устанавливается"
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO servers 
+        (server_name, host, port, username, password, ssh_key, auth_type, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'installing')
+    ''', (
+        server_name, 
+        data['host'], 
+        data.get('port', 22), 
+        data['username'],
+        data.get('password'), 
+        data.get('ssh_key'), 
+        data['auth_type']
+    ))
+    server_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
     
-    # Подключение и установка
+    # Запускаем установку в фоне
+    asyncio.create_task(
+        install_vpn_background(server_id, data, message.chat.id, bot, server_name)
+    )
+    
+    await message.answer(
+        f"⚙️ Установка сервера '{server_name}' началась в фоне.\n"
+        f"Я пришлю уведомление когда всё будет готово.",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    await state.clear()
+
+async def install_vpn_background(server_id, data, chat_id, bot, server_name):
+    """Фоновая установка VPN"""
     ssh = SSHClient(
         data['host'],
         data.get('port', 22),
@@ -159,49 +191,47 @@ async def finish_server_add(message: Message, state: FSMContext):
     
     connected = await ssh.connect()
     if not connected:
-        await message.answer("❌ Не удалось подключиться по SSH.")
-        ssh.close()
-        await state.clear()
+        await bot.send_message(chat_id, f"❌ Не удалось подключиться к серверу '{server_name}'")
+        
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE servers SET status='failed' WHERE id=?", (server_id,))
+        conn.commit()
+        conn.close()
         return
     
-    await message.answer("✅ SSH подключение установлено. Начинаю установку VPN...")
-    
-    installer = VPNInstaller(ssh)
+    installer = VPNInstaller(ssh, bot, chat_id)
     result = await installer.install_xui()
     
     ssh.close()
     
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
     if result['success']:
-        # Сохранение в БД
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
         cursor.execute('''
-            INSERT INTO servers 
-            (server_name, host, port, username, password, ssh_key, auth_type, 
-             panel_url, panel_username, panel_password, max_users)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 100)
-        ''', (
-            server_name, data['host'], data.get('port', 22), data['username'],
-            data.get('password'), data.get('ssh_key'), data['auth_type'],
-            result['panel_url'], result['username'], result['password']
-        ))
-        server_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
+            UPDATE servers 
+            SET panel_url=?, panel_username=?, panel_password=?, status='active'
+            WHERE id=?
+        ''', (result['panel_url'], result['username'], result['password'], server_id))
         
-        await message.answer(
-            f"✅ Сервер '{server_name}' успешно добавлен!\n\n"
-            f"IP: {data['host']}\n"
-            f"Панель управления: {result['panel_url']}\n"
+        await bot.send_message(
+            chat_id,
+            f"✅ Сервер '{server_name}' готов!\n\n"
+            f"Панель: {result['panel_url']}\n"
             f"Логин: {result['username']}\n"
             f"Пароль: {result['password']}\n\n"
-            f"Макс. пользователей: 100 (можно изменить в управлении)",
-            reply_markup=ReplyKeyboardRemove()
+            f"IP: {data['host']}"
         )
     else:
-        await message.answer(f"❌ Ошибка установки: {result.get('error', 'Неизвестная ошибка')}")
+        cursor.execute("UPDATE servers SET status='failed' WHERE id=?", (server_id,))
+        await bot.send_message(
+            chat_id, 
+            f"❌ Ошибка установки сервера '{server_name}':\n{result.get('error', 'Неизвестная ошибка')}"
+        )
     
-    await state.clear()
+    conn.commit()
+    conn.close()
 
 @router.callback_query(F.data == "list_servers")
 async def list_servers(callback: CallbackQuery):
