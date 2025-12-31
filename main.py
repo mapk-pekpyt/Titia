@@ -1,4 +1,3 @@
-import os
 import logging
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
@@ -25,27 +24,26 @@ init_db()
 @dp.message_handler(Command('start', 'help'))
 async def global_start(message: types.Message):
     if message.from_user.id == ADMIN_ID:
-        # Админ - показываем админ меню
-        from handlers.admin import admin_start
-        await admin_start(message)
+        from keyboards import admin_main_kb
+        await message.answer("👑 Админ-панель", reply_markup=admin_main_kb)
     else:
-        # Пользователь - показываем пользовательское меню
-        from handlers.user import user_start
-        await user_start(message)
+        from keyboards import user_main_kb
+        conn = __import__('sqlite3').connect('vpn_bot.db')
+        cursor = conn.cursor()
+        cursor.execute('INSERT OR IGNORE INTO users (id, username, full_name) VALUES (?, ?, ?)',
+                      (message.from_user.id, message.from_user.username, message.from_user.full_name))
+        conn.commit()
+        conn.close()
+        await message.answer("Привет! Выберите действие:", reply_markup=user_main_kb)
 
 async def on_startup(dp):
-    # Регистрируем все обработчики
     admin_handlers.register_admin_handlers(dp)
     user_handlers.register_user_handlers(dp)
-    
     logging.info("Бот запущен")
     try:
         await bot.send_message(ADMIN_ID, "🤖 Бот запущен!")
     except:
         pass
 
-async def on_shutdown(dp):
-    logging.info("Бот остановлен")
-
 if __name__ == '__main__':
-    executor.start_polling(dp, on_startup=on_startup, on_shutdown=on_shutdown)
+    executor.start_polling(dp, on_startup=on_startup)
