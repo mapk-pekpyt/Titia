@@ -7,6 +7,7 @@ import sqlite3
 import re
 import os
 import tempfile
+import datetime
 from utils.ssh_client import SSHClient
 from utils.vpn_installer import install_xui, get_server_info
 
@@ -19,6 +20,13 @@ class AddServer(StatesGroup):
     ssh_password = State()
     ssh_key_file = State()
 
+class GiveVPNStates(StatesGroup):
+    waiting_user_id = State()
+    waiting_tariff = State()
+
+class DisableVPNStates(StatesGroup):
+    waiting_user_id = State()
+
 # 1. Кнопка "🖥 Сервера"
 async def admin_servers(message: types.Message):
     if message.from_user.id != ADMIN_ID:
@@ -26,7 +34,14 @@ async def admin_servers(message: types.Message):
     from keyboards import admin_servers_kb
     await message.answer("🖥 Управление серверами", reply_markup=admin_servers_kb)
 
-# 2. Кнопка "➕ Добавить сервер" (начало)
+# 2. Кнопка "👥 Пользователи" - ДОБАВИЛ
+async def admin_users(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    from keyboards import admin_users_kb
+    await message.answer("👥 Управление пользователями", reply_markup=admin_users_kb)
+
+# 3. Кнопка "➕ Добавить сервер" (начало)
 async def add_server_start(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
@@ -148,9 +163,6 @@ async def process_ssh_key_file(message: types.Message, state: FSMContext):
         file = await message.bot.get_file(message.document.file_id)
         
         # Создаем временный файл
-        import tempfile
-        import os
-        
         with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.pem') as tmp_file:
             # Скачиваем и записываем содержимое
             file_content = await message.bot.download_file(file.file_path)
@@ -178,6 +190,7 @@ async def process_ssh_key_file(message: types.Message, state: FSMContext):
         
     except Exception as e:
         await message.answer(f"❌ Ошибка обработки файла: {str(e)}", reply_markup=back_kb())
+
 # Подключение и установка
 async def connect_and_install(message: types.Message, state: FSMContext):
     from keyboards import admin_main_kb
@@ -256,7 +269,7 @@ async def connect_and_install(message: types.Message, state: FSMContext):
     
     await state.finish()
 
-# 3. Кнопка "📋 Список серверов"
+# 4. Кнопка "📋 Список серверов"
 async def list_servers(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
@@ -289,7 +302,7 @@ async def list_servers(message: types.Message):
         from keyboards import admin_servers_kb
         await message.answer("❌ Серверов нет", reply_markup=admin_servers_kb)
 
-# 4. Кнопка "⚙️ Управление серверами" - показывает inline кнопки
+# 5. Кнопка "⚙️ Управление серверами"
 async def manage_servers(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
@@ -305,7 +318,6 @@ async def manage_servers(message: types.Message):
         await message.answer("❌ Нет активных серверов", reply_markup=admin_servers_kb)
         return
     
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     kb = InlineKeyboardMarkup(row_width=1)
     
     for server in servers:
@@ -315,7 +327,7 @@ async def manage_servers(message: types.Message):
     
     await message.answer("Выберите сервер для управления:", reply_markup=kb)
 
-# Добавляем обработчик callback
+# Обработчик callback управления серверами
 async def process_manage_callback(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
         return
@@ -359,16 +371,8 @@ async def process_manage_callback(callback: types.CallbackQuery):
                 f"Выберите действие:",
                 reply_markup=kb
             )
-from aiogram.dispatcher.filters.state import State, StatesGroup
 
-class GiveVPNStates(StatesGroup):
-    waiting_user_id = State()
-    waiting_tariff = State()
-
-class DisableVPNStates(StatesGroup):
-    waiting_user_id = State()
-
-# Кнопка "🎁 Выдать VPN"
+# 6. Кнопка "🎁 Выдать VPN"
 async def give_vpn(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
@@ -442,7 +446,6 @@ async def process_give_vpn_tariff(message: types.Message, state: FSMContext):
     conn = sqlite3.connect('vpn_bot.db')
     cursor = conn.cursor()
     
-    import datetime
     start_date = datetime.datetime.now()
     end_date = start_date + datetime.timedelta(days=days)
     
@@ -499,7 +502,7 @@ async def process_give_vpn_tariff(message: types.Message, state: FSMContext):
     from keyboards import admin_users_kb
     await message.answer(f"✅ VPN успешно выдан пользователю {user_id}", reply_markup=admin_users_kb)
 
-# Кнопка "🚫 Отключить VPN"
+# 7. Кнопка "🚫 Отключить VPN"
 async def disable_vpn(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
@@ -557,6 +560,7 @@ async def process_disable_vpn(message: types.Message, state: FSMContext):
     
     conn.close()
     await state.finish()
+
 # 8. Кнопка "💰 Метод оплаты"
 async def payment_method(message: types.Message):
     if message.from_user.id != ADMIN_ID:
@@ -626,12 +630,12 @@ def back_kb():
 def register_admin_handlers(dp: Dispatcher):
     # Основные кнопки
     dp.register_message_handler(admin_servers, text='🖥 Сервера', user_id=ADMIN_ID)
+    dp.register_message_handler(admin_users, text='👥 Пользователи', user_id=ADMIN_ID)
     dp.register_message_handler(add_server_start, text='➕ Добавить сервер', user_id=ADMIN_ID)
     dp.register_message_handler(list_servers, text='📋 Список серверов', user_id=ADMIN_ID)
-    dp.register_message_handler(manage_servers, text='⚙️ Управление серверами', user_id=ADMIN_ID)  # ✅ РАБОТАЕТ
-    dp.register_message_handler(admin_users, text='👥 Пользователи', user_id=ADMIN_ID)
-    dp.register_message_handler(give_vpn, text='🎁 Выдать VPN', user_id=ADMIN_ID)  # ✅ РАБОТАЕТ
-    dp.register_message_handler(disable_vpn, text='🚫 Отключить VPN', user_id=ADMIN_ID)  # ✅ РАБОТАЕТ
+    dp.register_message_handler(manage_servers, text='⚙️ Управление серверами', user_id=ADMIN_ID)
+    dp.register_message_handler(give_vpn, text='🎁 Выдать VPN', user_id=ADMIN_ID)
+    dp.register_message_handler(disable_vpn, text='🚫 Отключить VPN', user_id=ADMIN_ID)
     dp.register_message_handler(payment_method, text='💰 Метод оплаты', user_id=ADMIN_ID)
     dp.register_message_handler(admin_stats, text='📊 Статистика', user_id=ADMIN_ID)
     dp.register_message_handler(admin_back, text='🔙 Назад', user_id=ADMIN_ID)
