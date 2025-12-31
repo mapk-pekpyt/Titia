@@ -9,7 +9,8 @@ import os
 import tempfile
 import datetime
 from utils.ssh_client import SSHClient
-from utils.vpn_installer import install_xui, get_server_info
+# В начале файла handlers/admin.py исправь импорт:
+from utils.vpn_installer import VPNInstaller  # Вместо install_xui, get_server_info
 
 # Состояния для добавления сервера
 class AddServer(StatesGroup):
@@ -192,6 +193,8 @@ async def process_ssh_key_file(message: types.Message, state: FSMContext):
         await message.answer(f"❌ Ошибка обработки файла: {str(e)}", reply_markup=back_kb())
 
 # Подключение и установка
+# Находи функцию connect_and_install и замени на:
+
 async def connect_and_install(message: types.Message, state: FSMContext):
     from keyboards import admin_main_kb
     bot = message.bot
@@ -209,9 +212,16 @@ async def connect_and_install(message: types.Message, state: FSMContext):
     try:
         ssh_client = SSHClient(host, port, username, password, ssh_key)
         
-        # 2. Получаем характеристики сервера
+        # 2. Используем новый установщик
+        installer = VPNInstaller(
+            ssh_client=ssh_client,
+            bot=bot,
+            chat_id=message.chat.id
+        )
+        
+        # 3. Получаем характеристики сервера
         await message.answer("📊 Получаю характеристики сервера...")
-        server_info = await get_server_info(ssh_client)
+        server_info = await installer.get_server_info()
         
         if not server_info['success']:
             await message.answer(f"❌ Не удалось получить характеристики: {server_info.get('error')}", reply_markup=admin_main_kb)
@@ -225,26 +235,36 @@ async def connect_and_install(message: types.Message, state: FSMContext):
             f"• 🖥 ОС: {server_info['os']}\n"
             f"• ⚡ CPU: {server_info['cpu']}\n"
             f"• 💾 RAM: {server_info['ram']}\n"
-            f"• 💿 Диск: {server_info['disk']}\n"
-            f"• ⏱ Uptime: {server_info['uptime']}\n\n"
+            f"• 💿 Диск: {server_info['disk']}\n\n"
             f"🚀 Начинаю установку VPN..."
         )
         await message.answer(info_msg)
         
-        # 3. Устанавливаем VPN
-        success, panel_url, logs = await install_xui(ssh_client, bot)
+        # 4. Устанавливаем VPN
+        success, panel_url, logs = await installer.install_xui()
         
         if success:
             # Сохраняем сервер в БД
             conn = sqlite3.connect('vpn_bot.db')
             cursor = conn.cursor()
+            
+            # Извлекаем порт и путь из URL
+            import re
+            port_match = re.search(r':(\d+)/', panel_url)
+            path_match = re.search(r'/([^/]+)$', panel_url)
+            
+            panel_port = port_match.group(1) if port_match else "54321"
+            panel_path = path_match.group(1) if path_match else "admin"
+            
             cursor.execute('''
                 INSERT INTO servers (host, ssh_port, ssh_username, ssh_password, ssh_key, 
-                                   panel_path, panel_password, ram_info, cpu_info, disk_info)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (host, port, username, password, ssh_key, 
-                  panel_url.split('/')[-1], 'admin12345',
-                  server_info['ram'], server_info['cpu'], server_info['disk']))
+                                   panel_port, panel_path, panel_password, ram_info, cpu_info, disk_info)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                host, port, username, password, ssh_key, 
+                panel_port, panel_path, 'admin',
+                server_info['ram'], server_info['cpu'], server_info['disk']
+            ))
             conn.commit()
             conn.close()
             
@@ -253,8 +273,8 @@ async def connect_and_install(message: types.Message, state: FSMContext):
                 f"✅ VPN успешно установлен!\n\n"
                 f"🔗 Панель управления: {panel_url}\n"
                 f"👤 Логин: admin\n"
-                f"🔑 Пароль: admin12345\n\n"
-                f"🔧 Порты открыты: 54321, 443, 2096"
+                f"🔑 Пароль: admin\n\n"
+                f"🔧 Порты открыты: {panel_port}, 443, 2096"
             )
             await message.answer(result_msg, reply_markup=admin_main_kb)
             
@@ -262,7 +282,9 @@ async def connect_and_install(message: types.Message, state: FSMContext):
             await bot.send_message(ADMIN_CHAT_ID, f"✅ Новый сервер добавлен: {host}\n{panel_url}")
             
         else:
-            await message.answer(f"❌ Ошибка установки:\n{logs[-500:]}", reply_markup=admin_main_kb)
+            # Обрезаем логи если слишком длинные
+            error_logs = logs[-1000:] if len(logs) > 1000 else logs
+            await message.answer(f"❌ Ошибка установки:\n{error_logs}", reply_markup=admin_main_kb)
     
     except Exception as e:
         await message.answer(f"❌ Ошибка подключения: {str(e)}", reply_markup=admin_main_kb)
