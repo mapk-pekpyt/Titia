@@ -25,13 +25,16 @@ init_db()
 @dp.message_handler(Command('start', 'help'))
 async def global_start(message: types.Message):
     if message.from_user.id == ADMIN_ID:
+        # Админ - показываем админ меню
         from handlers.admin import admin_start
         await admin_start(message)
     else:
+        # Пользователь - показываем пользовательское меню
         from handlers.user import user_start
         await user_start(message)
 
 async def on_startup(dp):
+    # Регистрируем все обработчики
     admin_handlers.register_admin_handlers(dp)
     user_handlers.register_user_handlers(dp)
     
