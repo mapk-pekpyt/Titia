@@ -1,248 +1,142 @@
-from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, FSInputFile
-from aiogram.filters import CommandStart, Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram import types, Dispatcher
+from aiogram.dispatcher import FSMContext
+from config import SUPPORT_USERNAME, TRIBUTE_PRODUCTS
+from database import get_db
 import sqlite3
-import os
-from config import ADMIN_ID, ADMIN_CHAT_ID, DB_PATH, TARIFFS
-from keyboards import user_main_menu, tariffs_menu, admin_main_menu
-from datetime import datetime, timedelta
+import datetime
 
-router = Router()
-
-class TariffSelection(StatesGroup):
-    choose_server = State()
-    confirm_payment = State()
-
-@router.message(CommandStart())
-async def start_command(message: Message):
-    if message.from_user.id == ADMIN_ID:
-        await message.answer("👨‍💻 Админ-панель", reply_markup=admin_main_menu())
-    else:
-        await message.answer(
-            "🛡️ Добро пожаловать в VPN-сервис!\n"
-            "Выберите действие:",
-            reply_markup=user_main_menu()
-        )
-
-@router.message(F.text == "🛡️ Получить VPN")
-async def get_vpn(message: Message):
-    await message.answer("Выберите тариф:", reply_markup=tariffs_menu())
-
-@router.message(F.text == "📊 Моя подписка")
-async def my_subscription(message: Message):
-    conn = sqlite3.connect(DB_PATH)
+async def user_start(message: types.Message):
+    # Регистрация пользователя
+    conn = sqlite3.connect('vpn_bot.db')
     cursor = conn.cursor()
     cursor.execute('''
-        SELECT s.tariff, s.end_date, se.host
+        INSERT OR IGNORE INTO users (id, username, full_name) 
+        VALUES (?, ?, ?)
+    ''', (message.from_user.id, message.from_user.username, message.from_user.full_name))
+    conn.commit()
+    conn.close()
+    
+    await message.answer(f"Привет! Выберите действие:", reply_markup=user_main_kb)
+
+async def get_vpn(message: types.Message):
+    await message.answer("Выберите тариф:", reply_markup=tariffs_kb)
+
+async def process_trial(message: types.Message):
+    user_id = message.from_user.id
+    conn = sqlite3.connect('vpn_bot.db')
+    cursor = conn.cursor()
+    
+    # Проверяем, использовал ли пробник
+    cursor.execute("SELECT trial_used FROM users WHERE id=?", (user_id,))
+    user = cursor.fetchone()
+    
+    if not user or user[0] == 0:
+        # Выдаем пробник
+        end_date = datetime.datetime.now() + datetime.timedelta(days=1)
+        cursor.execute('''
+            INSERT INTO subscriptions (user_id, tariff, status, start_date, end_date)
+            VALUES (?, 'trial', 'active', datetime('now'), ?)
+        ''', (user_id, end_date))
+        
+        cursor.execute("UPDATE users SET trial_used=1 WHERE id=?", (user_id,))
+        conn.commit()
+        
+        # Получаем свободный сервер
+        cursor.execute('''
+            SELECT s.host, s.panel_port, s.panel_path 
+            FROM servers s 
+            WHERE s.status='active' 
+            AND s.current_users < s.max_users 
+            LIMIT 1
+        ''')
+        server = cursor.fetchone()
+        
+        if server:
+            panel_url = f"http://{server[0]}:{server[1]}/{server[2]}"
+            await message.answer(
+                f"🎁 Пробный период активирован на 1 день!\n"
+                f"🔗 Панель управления: {panel_url}\n"
+                f"👤 Логин: admin\n"
+                f"🔑 Пароль: admin12345\n\n"
+                f"После входа создайте Reality-подключение:\n"
+                f"• Порт: 443\n"
+                f"• SNI: www.google.com\n"
+                f"• SPX: yass"
+            )
+        else:
+            await message.answer("😔 Нет доступных серверов. Обратитесь к администратору.")
+    else:
+        await message.answer("❌ Вы уже использовали пробный период.")
+    
+    conn.close()
+
+async def process_payment(message: types.Message):
+    tariff_text = message.text
+    tariffs = {
+        '📅 Неделя - 100₽': 'week',
+        '📅 Месяц - 250₽': 'month',
+        '📅 2 месяца - 450₽': '2months'
+    }
+    
+    if tariff_text in tariffs:
+        tariff = tariffs[tariff_text]
+        product = TRIBUTE_PRODUCTS[tariff]
+        
+        # Ссылка на оплату в Tribute
+        payment_url = f"https://t.me/tribute/app?startapp={product['id']}"
+        
+        await message.answer(
+            f"💳 Оплата тарифа: {tariff_text}\n"
+            f"📅 Срок: {product['days']} дней\n\n"
+            f"👉 [Оплатить через Tribute]({payment_url})\n\n"
+            f"После оплаты подписка активируется автоматически.",
+            parse_mode='Markdown',
+            disable_web_page_preview=True
+        )
+
+async def my_subscription(message: types.Message):
+    user_id = message.from_user.id
+    conn = sqlite3.connect('vpn_bot.db')
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT s.tariff, s.status, s.end_date, se.host
         FROM subscriptions s
-        JOIN servers se ON s.server_id = se.id
-        WHERE s.user_id = ? AND s.payment_status = 'active'
-    ''', (message.from_user.id,))
+        LEFT JOIN servers se ON s.server_id = se.id
+        WHERE s.user_id=? AND s.status='active'
+        ORDER BY s.end_date DESC LIMIT 1
+    ''', (user_id,))
+    
     sub = cursor.fetchone()
     conn.close()
     
     if sub:
-        tariff, end_date, host = sub
-        days_left = (datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S") - datetime.now()).days
+        tariff, status, end_date, host = sub
         await message.answer(
-            f"📊 Ваша подписка:\n\n"
-            f"Тариф: {tariff}\n"
-            f"Сервер: {host}\n"
-            f"Дней осталось: {days_left}"
+            f"📄 Ваша подписка:\n"
+            f"📅 Тариф: {tariff}\n"
+            f"🔐 Статус: {status}\n"
+            f"📆 Окончание: {end_date}\n"
+            f"🖥 Сервер: {host or 'Не назначен'}"
         )
     else:
-        await message.answer("У вас нет активной подписки.")
+        await message.answer("❌ У вас нет активной подписки.")
 
-@router.message(F.text == "🆘 Поддержка")
-async def support(message: Message):
-    await message.answer("По всем вопросам обращайтесь: @vpnhostik")
-
-@router.callback_query(F.data.startswith("tariff_"))
-async def process_tariff(callback: CallbackQuery, state: FSMContext):
-    tariff = callback.data.split("_")[1]
-    user_id = callback.from_user.id
-    
-    # Проверка пробного тарифа
-    if tariff == "trial":
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT id FROM subscriptions 
-            WHERE user_id = ? AND tariff = 'trial'
-        ''', (user_id,))
-        if cursor.fetchone():
-            await callback.answer("❌ Пробный тариф уже использован!", show_alert=True)
-            conn.close()
-            return
-        conn.close()
-    
-    await state.update_data(tariff=tariff, user_id=user_id)
-    
-    # Для пробного тарифа — автоматическое добавление
-    if tariff == "trial":
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT id, server_name FROM servers 
-            WHERE current_users < max_users 
-            ORDER BY current_users ASC LIMIT 1
-        ''')
-        server = cursor.fetchone()
-        
-        if not server:
-            await callback.answer("❌ Нет доступных серверов", show_alert=True)
-            conn.close()
-            return
-        
-        server_id, server_name = server
-        end_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
-        
-        cursor.execute('''
-            INSERT INTO subscriptions 
-            (user_id, server_id, tariff, payment_amount, payment_status, start_date, end_date)
-            VALUES (?, ?, ?, 0, 'active', datetime('now'), ?)
-        ''', (user_id, server_id, tariff, end_date))
-        
-        cursor.execute('''
-            UPDATE servers SET current_users = current_users + 1 WHERE id = ?
-        ''', (server_id,))
-        
-        conn.commit()
-        conn.close()
-        
-        await callback.message.answer(
-            f"✅ Пробный день активирован!\n"
-            f"Сервер: {server_name}\n"
-            f"Доступ до: {end_date}"
-        )
-        await state.clear()
-        return
-    
-    # Для платных тарифов — выбор сервера
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT id, server_name FROM servers 
-        WHERE current_users < max_users
-    ''')
-    servers = cursor.fetchall()
-    conn.close()
-    
-    if not servers:
-        await callback.answer("❌ Нет доступных серверов", show_alert=True)
-        return
-    
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[])
-    for server_id, server_name in servers:
-        keyboard.inline_keyboard.append([
-            InlineKeyboardButton(text=server_name, callback_data=f"server_{server_id}")
-        ])
-    keyboard.inline_keyboard.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_tariffs")])
-    
-    tariff_info = TARIFFS[tariff]
-    await callback.message.edit_text(
-        f"Тариф: {tariff_info['name']}\n"
-        f"Цена: {tariff_info['price']}₽\n\n"
-        f"Выберите сервер:",
-        reply_markup=keyboard
+async def help_command(message: types.Message):
+    await message.answer(
+        f"🆘 Помощь\n\n"
+        f"1. Для получения VPN выберите тариф\n"
+        f"2. Оплатите через Tribute\n"
+        f"3. После оплаты получите доступ к панели\n"
+        f"4. Настройте Reality-подключение\n\n"
+        f"Техподдержка: {SUPPORT_USERNAME}"
     )
-    await state.set_state(TariffSelection.choose_server)
 
-@router.callback_query(F.data.startswith("server_"), TariffSelection.choose_server)
-async def choose_server(callback: CallbackQuery, state: FSMContext):
-    server_id = callback.data.split("_")[1]
-    data = await state.get_data()
-    tariff = data['tariff']
-    tariff_info = TARIFFS[tariff]
-    
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('SELECT server_name FROM servers WHERE id = ?', (server_id,))
-    server_name = cursor.fetchone()[0]
-    conn.close()
-    
-    await state.update_data(server_id=server_id, server_name=server_name)
-    
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Подтвердить", callback_data="confirm_payment")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data=f"tariff_{tariff}")]
-    ])
-    
-    await callback.message.edit_text(
-        f"📋 Подтвердите заказ:\n\n"
-        f"Тариф: {tariff_info['name']}\n"
-        f"Сервер: {server_name}\n"
-        f"Сумма: {tariff_info['price']}₽\n\n"
-        f"После подтверждения вы получите реквизиты для оплаты.",
-        reply_markup=keyboard
-    )
-    await state.set_state(TariffSelection.confirm_payment)
-
-@router.callback_query(F.data == "confirm_payment", TariffSelection.confirm_payment)
-async def confirm_payment(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    user_id = data['user_id']
-    tariff = data['tariff']
-    server_id = data['server_id']
-    server_name = data['server_name']
-    tariff_info = TARIFFS[tariff]
-    
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    # Получаем реквизиты оплаты
-    cursor.execute('SELECT card_number, phone_number FROM payment_details WHERE is_active = TRUE LIMIT 1')
-    payment = cursor.fetchone()
-    
-    if payment:
-        card, phone = payment
-    else:
-        card, phone = "2200 1234 5678 9010", "+79991234567"
-    
-    # Отправляем в админ-чат
-    admin_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Подтвердить оплату", callback_data=f"admin_confirm_{user_id}_{server_id}_{tariff}")],
-        [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"admin_reject_{user_id}")]
-    ])
-    
-    await callback.bot.send_message(
-        ADMIN_CHAT_ID,
-        f"💰 Новая оплата:\n\n"
-        f"Пользователь: @{callback.from_user.username or 'без юзернейма'}\n"
-        f"ID: {user_id}\n"
-        f"Тариф: {tariff_info['name']}\n"
-        f"Сервер: {server_name}\n"
-        f"Сумма: {tariff_info['price']}₽\n\n"
-        f"Ожидает подтверждения.",
-        reply_markup=admin_keyboard
-    )
-    
-    # Отправляем пользователю реквизиты
-    await callback.message.edit_text(
-        f"💳 Реквизиты для оплаты:\n\n"
-        f"Карта: `{card}`\n"
-        f"СБП: {phone}\n\n"
-        f"Сумма: {tariff_info['price']}₽\n\n"
-        f"После оплаты отправьте скриншот @vpnhostik\n"
-        f"Ваш заказ передан администратору.",
-        parse_mode="Markdown"
-    )
-    
-    # Сохраняем подписку в ожидании
-    cursor.execute('''
-        INSERT INTO subscriptions 
-        (user_id, server_id, tariff, payment_amount, payment_status)
-        VALUES (?, ?, ?, ?, 'pending')
-    ''', (user_id, server_id, tariff, tariff_info['price']))
-    
-    conn.commit()
-    conn.close()
-    await state.clear()
-
-@router.callback_query(F.data == "back_to_tariffs")
-async def back_to_tariffs(callback: CallbackQuery, state: FSMContext):
-    await callback.message.edit_text("Выберите тариф:", reply_markup=tariffs_menu())
-    await state.clear()
+def register_user_handlers(dp: Dispatcher):
+    dp.register_message_handler(user_start, commands=['start', 'help'])
+    dp.register_message_handler(get_vpn, text='🔑 Получить VPN')
+    dp.register_message_handler(process_trial, text='🎁 Пробник (1 день)')
+    dp.register_message_handler(process_payment, text=['📅 Неделя - 100₽', '📅 Месяц - 250₽', '📅 2 месяца - 450₽'])
+    dp.register_message_handler(my_subscription, text='📄 Моя подписка')
+    dp.register_message_handler(help_command, text='🆘 Помощь')
+    dp.register_message_handler(user_start, text='🔙 Назад')
