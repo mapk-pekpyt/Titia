@@ -1,11 +1,13 @@
 from aiogram import types, Dispatcher
 from aiogram.dispatcher import FSMContext
 from config import SUPPORT_USERNAME, TRIBUTE_PRODUCTS
-from database import get_db
 import sqlite3
 import datetime
 
 async def user_start(message: types.Message):
+    # Импортируем здесь, чтобы избежать циклического импорта
+    from keyboards import user_main_kb
+    
     # Регистрация пользователя
     conn = sqlite3.connect('vpn_bot.db')
     cursor = conn.cursor()
@@ -19,9 +21,12 @@ async def user_start(message: types.Message):
     await message.answer(f"Привет! Выберите действие:", reply_markup=user_main_kb)
 
 async def get_vpn(message: types.Message):
+    from keyboards import tariffs_kb
     await message.answer("Выберите тариф:", reply_markup=tariffs_kb)
 
 async def process_trial(message: types.Message):
+    from keyboards import user_main_kb
+    
     user_id = message.from_user.id
     conn = sqlite3.connect('vpn_bot.db')
     cursor = conn.cursor()
@@ -61,7 +66,8 @@ async def process_trial(message: types.Message):
                 f"После входа создайте Reality-подключение:\n"
                 f"• Порт: 443\n"
                 f"• SNI: www.google.com\n"
-                f"• SPX: yass"
+                f"• SPX: yass",
+                reply_markup=user_main_kb
             )
         else:
             await message.answer("😔 Нет доступных серверов. Обратитесь к администратору.")
@@ -71,6 +77,8 @@ async def process_trial(message: types.Message):
     conn.close()
 
 async def process_payment(message: types.Message):
+    from keyboards import user_main_kb
+    
     tariff_text = message.text
     tariffs = {
         '📅 Неделя - 100₽': 'week',
@@ -91,10 +99,13 @@ async def process_payment(message: types.Message):
             f"👉 [Оплатить через Tribute]({payment_url})\n\n"
             f"После оплаты подписка активируется автоматически.",
             parse_mode='Markdown',
-            disable_web_page_preview=True
+            disable_web_page_preview=True,
+            reply_markup=user_main_kb
         )
 
 async def my_subscription(message: types.Message):
+    from keyboards import user_main_kb
+    
     user_id = message.from_user.id
     conn = sqlite3.connect('vpn_bot.db')
     cursor = conn.cursor()
@@ -117,20 +128,28 @@ async def my_subscription(message: types.Message):
             f"📅 Тариф: {tariff}\n"
             f"🔐 Статус: {status}\n"
             f"📆 Окончание: {end_date}\n"
-            f"🖥 Сервер: {host or 'Не назначен'}"
+            f"🖥 Сервер: {host or 'Не назначен'}",
+            reply_markup=user_main_kb
         )
     else:
-        await message.answer("❌ У вас нет активной подписки.")
+        await message.answer("❌ У вас нет активной подписки.", reply_markup=user_main_kb)
 
 async def help_command(message: types.Message):
+    from keyboards import user_main_kb
+    
     await message.answer(
         f"🆘 Помощь\n\n"
         f"1. Для получения VPN выберите тариф\n"
         f"2. Оплатите через Tribute\n"
         f"3. После оплаты получите доступ к панели\n"
         f"4. Настройте Reality-подключение\n\n"
-        f"Техподдержка: {SUPPORT_USERNAME}"
+        f"Техподдержка: {SUPPORT_USERNAME}",
+        reply_markup=user_main_kb
     )
+
+async def back_handler(message: types.Message):
+    from keyboards import user_main_kb
+    await message.answer("Главное меню:", reply_markup=user_main_kb)
 
 def register_user_handlers(dp: Dispatcher):
     dp.register_message_handler(user_start, commands=['start', 'help'])
@@ -139,4 +158,4 @@ def register_user_handlers(dp: Dispatcher):
     dp.register_message_handler(process_payment, text=['📅 Неделя - 100₽', '📅 Месяц - 250₽', '📅 2 месяца - 450₽'])
     dp.register_message_handler(my_subscription, text='📄 Моя подписка')
     dp.register_message_handler(help_command, text='🆘 Помощь')
-    dp.register_message_handler(user_start, text='🔙 Назад')
+    dp.register_message_handler(back_handler, text='🔙 Назад')
